@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/agenttune-logo-on-dark.png">
-    <img alt="AgentTune" src="docs/assets/agenttune-logo-on-light.png" width="320">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Lexsi-Labs/AgentTune/main/docs/assets/agenttune-logo-on-dark.png">
+    <img alt="AgentTune" src="https://raw.githubusercontent.com/Lexsi-Labs/AgentTune/main/docs/assets/agenttune-logo-on-light.png" width="320">
   </picture>
 </p>
 
@@ -522,8 +522,8 @@ AgentTune is built on the following projects:
 <div align="center">
   <a href="https://lexsi.ai/">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/assets/lexsilogowhite.png">
-      <img src="docs/assets/lexsilogodark.png" width="300" alt="Lexsi Labs">
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Lexsi-Labs/AgentTune/main/docs/assets/lexsilogowhite.png">
+      <img src="https://raw.githubusercontent.com/Lexsi-Labs/AgentTune/main/docs/assets/lexsilogodark.png" width="300" alt="Lexsi Labs">
     </picture>
   </a>
   <br>
