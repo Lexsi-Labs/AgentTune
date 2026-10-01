@@ -6,8 +6,8 @@ hide:
 
 <div class="at-hero" markdown>
 
-<img class="at-hero-mark at-hero-mark--light" src="assets/agenttune-logo-black.png" alt="AgentTune">
-<img class="at-hero-mark at-hero-mark--dark" src="assets/agenttune-logo-white.png" alt="AgentTune">
+<img class="at-hero-mark at-hero-mark--light" src="assets/agenttune-logo-on-light.png" alt="AgentTune">
+<img class="at-hero-mark at-hero-mark--dark" src="assets/agenttune-logo-on-dark.png" alt="AgentTune">
 
 # Train agents that call tools { .at-hero-title }
 
@@ -199,7 +199,8 @@ Corresponding author: Pratinav Seth
 <div align="center" markdown>
 
 <a href="https://lexsi.ai/">
-<img src="assets/lexsilogowhite.png" width="300">
+<img class="at-on-light" src="assets/lexsilogodark.png" width="300" alt="Lexsi Labs">
+<img class="at-on-dark" src="assets/lexsilogowhite.png" width="300" alt="Lexsi Labs">
 </a>
 
 <https://www.lexsi.ai>

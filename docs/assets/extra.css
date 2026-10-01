@@ -73,8 +73,14 @@
 /* ── Header & tabs ──────────────────────────────────────────────────────── */
 .md-header__button.md-logo img,
 .md-header__button.md-logo svg {
-  height: 1.5rem;
+  height: 1.9rem;
   width: auto;
+}
+
+/* the logo is the full wordmark, so the header's site-name / page-title text
+   only repeats it; keep the space so search and the repo link stay put */
+.md-header__title {
+  visibility: hidden;
 }
 
 /* brand hairline under the tab bar — a pulse travelling left to right */
@@ -350,3 +356,8 @@
   width: 100%;
   display: table;
 }
+
+/* logos that come in an on-light and an on-dark version (e.g. the Lexsi logo) */
+.md-typeset img.at-on-dark { display: none; }
+[data-md-color-scheme="slate"] .md-typeset img.at-on-light { display: none; }
+[data-md-color-scheme="slate"] .md-typeset img.at-on-dark { display: inline; }
