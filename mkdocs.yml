@@ -11,8 +11,8 @@ copyright: >
 
 theme:
   name: material
-  logo: assets/agenttune-logo-white.png
-  favicon: assets/agenttune-logo-black.png
+  logo: assets/agenttune-logo-on-dark.png   # transparent; the header is ink in both schemes
+  favicon: assets/favicon.png
   font:
     text: Schibsted Grotesk
     code: IBM Plex Mono
