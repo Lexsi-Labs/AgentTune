@@ -1,0 +1,34 @@
+
+extends: ../../../../../config.yaml
+
+name: "Simple Custom Classifier"
+id: "custom/simple_classifier"
+version: "1.0.0"
+
+max_total_steps: 3
+
+stages:
+  - id: classify
+    type: llm_call
+    model: "Qwen/Qwen2.5-1.5B-Instruct"
+    prompt: |
+      Classify the sentiment of this text.
+
+      Text: {input_text}
+
+      Return ONLY this JSON:
+      {"classification": "POSITIVE"}
+      {"classification": "NEGATIVE"}
+      {"classification": "NEUTRAL"}
+    output_schema:
+      type: object
+      properties:
+        classification: {type: string}
+      required: [classification]
+    temperature: 0.0
+    max_tokens: 50
+    next: output
+
+  - id: output
+    type: output
+    verdict_field: "classify.output.classification"

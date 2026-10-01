@@ -1,0 +1,35 @@
+extends: ../../../../../config.yaml
+
+name: "SENTIMENT ANALYSIS"
+id: "generic/sentiment_analysis"
+version: "1.0.0"
+description: |
+  Generic decision pipeline for sentiment_analysis.
+tags: ["generic"]
+compliance_note: "Domain-agnostic template."
+
+max_total_steps: 30
+
+stages:
+  - id: process
+    type: llm_call
+    description: "Analyze sentiment"
+    prompt: |
+      Analyze the sentiment of the given text and respond with a sentiment label and confidence score.
+      Respond ONLY with valid JSON (no markdown, no code blocks): {"verdict": "POSITIVE" | "NEGATIVE" | "NEUTRAL", "confidence": <0-10>}
+
+      Text: {input_text}
+    output_schema:
+      type: object
+      properties:
+        verdict: {type: string, enum: ["POSITIVE", "NEGATIVE", "NEUTRAL"]}
+        confidence: {type: integer, minimum: 0, maximum: 10}
+      required: [verdict, confidence]
+    next: output_stage
+
+  - id: output_stage
+    type: output
+    description: "Final output with extracted sentiment"
+    verdict_field: "process.output.verdict"
+    confidence_field: "process.output.confidence"
+    destinations: [file]

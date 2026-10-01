@@ -1,0 +1,209 @@
+extends: ../../../../../config.yaml
+
+name: "Iterative Refinement"
+id: "generic/iterative_refinement"
+version: "1.1.0"
+description: |
+  Multi-turn iterative refinement pipeline — the closest analogy to an OpenAI Gym
+  episode loop within AgentTune Decide.
+
+  Loop structure (like env.step):
+    generate → evaluate_quality → {score >= 7: done | score < 7 and iter < 3: loop back | max: done}
+
+  How this compares to / improves upon OpenEnv:
+    Gym env.step(action)          → LLM generate stage + feedback injection
+    Gym observation               → {generate.output.output} context passed into next step
+    Gym reward                    → judge score (evaluate_quality.output.overall_score)
+    Gym done condition            → on_result: score >= 7 or iteration >= max_iterations
+    Gym max_episode_steps         → max_iterations: 3 per stage + max_total_steps: 20
+    Gym fixed action space        → output_schema per stage (customisable per template)
+    Gym Python-only reward        → reward.stages.evaluate_quality.fn: judge_score in YAML
+    No LLM in Gym                 → llm_call / llm_judge stage types
+    No training data in Gym       → collect.algorithm: grpo with judge scores as reward signal
+
+tags: ["iteration", "refinement", "quality", "generic", "feedback", "loop"]
+compliance_note: "Audit trail records all iterations and refinement feedback for traceability."
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Pipeline limits
+# ──────────────────────────────────────────────────────────────────────────────
+max_total_steps: 20
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Episode config  (Gym: gym.make("env-v0") + env.reset() per episode)
+# ──────────────────────────────────────────────────────────────────────────────
+episode:
+  n_episodes: 200           # run 200 refinement episodes for GRPO training
+  batch_size: 8             # 8 parallel pipelines (generate diverse rollouts)
+  shuffle_inputs: true      # vary prompts to avoid over-fitting to one topic
+  seed: 0
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Observation schema  (Gym: observation_space)
+# The pipeline accepts a free-text task description as input.
+# ──────────────────────────────────────────────────────────────────────────────
+observation_schema:
+  type: string              # free-text task / generation request
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Reward config  (Gym: step() returns reward)
+#
+# The judge score from evaluate_quality is the RL training signal.
+# iteration_penalty discourages wasting LLM calls on unnecessary retries.
+# ──────────────────────────────────────────────────────────────────────────────
+reward:
+  stages:
+    evaluate_quality:
+      fn: verdict_binary        # use evaluation verdict as reward signal
+      weight: 1.0
+    generate:
+      fn: iteration_penalty     # rewards reaching quality in fewer iterations
+      weight: 0.2               # smaller weight — efficiency bonus, not primary signal
+    output_result:
+      fn: verdict_binary        # 1.0 when pipeline completes (reached output stage)
+      weight: 0.1
+
+  # Episode reward = weighted_mean of stage rewards
+  final_fn: weighted_mean
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Collect config  (GRPO: group rewards across batch_size rollouts)
+#
+# With batch_size: 8 and algorithm: grpo, each batch of 8 rollouts on the
+# same prompt forms a GRPO group. The judge score is the group reward signal.
+# ──────────────────────────────────────────────────────────────────────────────
+collect:
+  algorithm: grpo               # group reward from judge scores
+  stage_id: generate            # fine-tune the generate stage
+  min_samples: 200              # 200 episodes × batch_size 8 = 1600 rollouts
+  output_path: ./collected/iterative_refinement_grpo.jsonl
+  auto_train: false
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Eval config
+# ──────────────────────────────────────────────────────────────────────────────
+eval:
+  test_set: null
+  metrics: [judge_score_mean, latency_p50, latency_p95]
+  thresholds:
+    judge_score_mean: 0.70      # mean quality should exceed 7/10 on test set
+    latency_p95: 30000          # 30s — iterative pipelines take longer
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Pipeline stages
+# ──────────────────────────────────────────────────────────────────────────────
+stages:
+  # ── Step 1: Generate  (Gym: env.step(action) — model produces output) ────
+  - id: generate
+    type: llm_call
+    description: "Generate initial output; loop back with feedback if quality < 7"
+    model: "Qwen/Qwen2.5-1.5B-Instruct"
+    prompt: |
+      Generate a high-quality output based on the following request:
+
+      {input_text}
+
+      Focus on:
+      - Clarity and coherence
+      - Completeness (do not skip important details)
+      - Proper structure and formatting
+      - Accuracy and relevance to the request
+
+      {feedback}
+    output_schema:
+      type: object
+      properties:
+        output:
+          type: string
+          description: "The generated content (summary, essay, code, etc.)"
+        output_length:
+          type: integer
+          description: "Approximate length of the output in words"
+        key_points:
+          type: array
+          items: {type: string}
+          description: "Key points or elements covered in the output"
+      required: [output]
+    max_iterations: 3         # at most 3 generation attempts per episode
+    on_parse_error: generate  # retry on JSON parse failure
+    next: evaluate_quality
+
+  # ── Step 2: Evaluate  (Gym: reward = env.step(action)[1]) ────────────────
+  - id: evaluate_quality
+    type: llm_call
+    description: "Score generated output; provide structured feedback for next iteration"
+    model: "Qwen/Qwen2.5-1.5B-Instruct"
+    prompt: |
+      Evaluate the quality of this output against the original request.
+
+      === Original Request ===
+      {input_text}
+
+      === Generated Output ===
+      {generate.output.output}
+
+      === Evaluation Criteria ===
+      Score each criterion 0–10:
+      1. COMPLETENESS  — Does it address all aspects of the request?
+      2. CLARITY       — Is it clear, well-structured, and easy to understand?
+      3. ACCURACY      — Is the information correct and relevant?
+      4. LENGTH        — Is the length appropriate for the task?
+      5. QUALITY       — Does it meet professional/academic standards?
+
+      Provide:
+      - Individual scores for each criterion
+      - Overall quality score (average, 0–10)
+      - Key strengths (what works well)
+      - Specific improvement areas (if score < 7)
+      - Concrete, actionable refinement suggestions (if score < 7)
+    output_schema:
+      type: object
+      properties:
+        completeness: {type: integer, minimum: 0, maximum: 10}
+        clarity: {type: integer, minimum: 0, maximum: 10}
+        accuracy: {type: integer, minimum: 0, maximum: 10}
+        length_appropriateness: {type: integer, minimum: 0, maximum: 10}
+        professionalism: {type: integer, minimum: 0, maximum: 10}
+        overall_score:
+          type: integer
+          minimum: 0
+          maximum: 10
+          description: "Average score across all criteria"
+        strengths:
+          type: array
+          items: {type: string}
+        improvement_areas:
+          type: array
+          items: {type: string}
+        refinement_suggestions:
+          type: array
+          items: {type: string}
+      required: [overall_score]
+    max_iterations: 1
+    on_result:
+      # Quality met — exit loop  (Gym: done = True)
+      - condition: "overall_score >= 7"
+        goto: output_result
+
+      # Quality not met, iterations remain — loop back with feedback  (Gym: done = False, step again)
+      - condition: "overall_score < 7"
+        goto: generate
+        inject: |
+          Previous iteration received a quality score of {evaluate_quality.output.overall_score}/10.
+
+          Areas needing improvement:
+          {evaluate_quality.output.improvement_areas}
+
+          Refinement suggestions:
+          {evaluate_quality.output.refinement_suggestions}
+
+          Please revise the output to address these issues directly.
+    on_fail: output_result
+
+  # ── Terminal stage  (Gym: info dict returned from final step) ─────────────
+  - id: output_result
+    type: output
+    description: "Output the final refined result with quality metrics"
+    verdict_field: "evaluate_quality.overall_score"
+    confidence_field: "evaluate_quality.overall_score"
+    destinations: [file]

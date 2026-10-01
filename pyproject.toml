@@ -1,0 +1,472 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel", "setuptools_scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+# Fallback for builds with no git metadata and no SETUPTOOLS_SCM_PRETEND_VERSION
+# (e.g. building a wheel from an unpacked sdist locally). Keep in sync with the
+# latest released tag.
+fallback_version = "1.1.0"
+# Don't append a local "+g<hash>" segment - PyPI rejects local versions, and the
+# publish workflow already guards against dev versions.
+local_scheme = "no-local-version"
+
+[project]
+name = "agenttune"
+# Version is derived from the git tag by setuptools_scm (see [tool.setuptools_scm]
+# above). CI sets SETUPTOOLS_SCM_PRETEND_VERSION to the release tag when building
+# for PyPI, so a GitHub release tagged 1.2.0 publishes agenttune 1.2.0.
+dynamic = ["version"]
+description = "AgentTune: build agentic workflows, then train, evaluate, distill, and self-heal them through one trajectory schema. A TRL-backed alignment + fine-tuning library (full RL coverage — DPO, PPO, GRPO) with an agentic integration spine on top: agent-design / memory-design / harness-design pillars, a Project lifecycle, and a FastAPI service."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Lexsi Labs Source Available License (LSAL) v1.1" }
+authors = [
+    {name = "R. E. Zera Marveen Lyngkhoi", email = "zera.lyngkhoi@lexsi.ai"},
+    {name = "Abhivansh Gupta"},
+    {name = "Vidushee Vats", email = "vidushee.vats@lexsi.ai"},
+    {name = "Ram Mohan Rao Kadiyala"},
+    {name = "Pratinav Seth", email = "pratinav.seth@lexsi.ai"}
+]
+keywords = [
+    "alignment",
+    "rlhf",
+    "fine-tuning",
+    "llm",
+    "machine learning", 
+    "SFT", 
+    "RL", 
+    "DPO",
+    "GRPO",
+    "PPO",
+    "transformers",
+    "trl",
+    "reward-functions",
+    "evaluation",
+    "lm-eval",
+    "wandb",
+    "tensorboard",
+    "checkpointing",
+    "device-management",
+    "unified-config",
+    "cli",
+    "agents",
+    "agentic",
+    "agent-training",
+    "agentic-distillation",
+    "react",
+    "reflexion",
+    "tree-of-thoughts",
+    "agent-memory",
+    "trajectory",
+    "self-healing",
+    "openenv",
+    "rollout"
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: Other/Proprietary License",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    # Core ML dependencies
+    # Pinned to 2.11.0, the version the optional `[vllm]` extra resolves with (vllm 0.22.1
+    # on Linux). The base install has no vLLM and also resolves on macOS.
+    "torch==2.11.0",
+    # cohere_compass (North Micro Vision) imports torchvision.
+    "torchvision",
+    # 5.15 is the floor for cohere_compass; 5.17 is verified with the Cohere/Aya archs
+    # (cohere, cohere2, aya_vision, cohere_compass). Without a floor, Linux resolves 4.57.
+    "transformers>=5.15,<6",
+    "datasets>=2.14.0",
+    "accelerate>=0.24.0",
+    "peft>=0.6.0",
+    # peft 0.19+ calls is_torchao_available() on trainer.train() and raises if
+    # torchao is installed below 0.16. Colab GPU ships torchao==0.10.0.
+    # 0.17 is the torch==2.11.0 matching release (ABI-stable from 0.17 onward).
+    "torchao>=0.17.0,<0.18",
+    "bitsandbytes>=0.41.0",
+    # w4a16/compressed-tensors checkpoints (Cohere North Mini Code, Gemma 4
+    # QAT) and gpt-oss's mxfp4 quantizer both need this.
+    "compressed-tensors>=0.15.0",
+
+    # Core Python dependencies
+    "numpy>=1.21.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+    "huggingface-hub>=0.17.0",
+    "tqdm>=4.64.0",
+    "psutil>=5.9.0",
+    "litellm",
+    # Used by agentic/tools/builtin/finqa_tool.py's calculator() (and the
+    # sql_grounding_reward reward function) for safe arithmetic-expression evaluation.
+    "asteval",
+
+
+    "langchain",
+    "langchain-community",
+    
+    # Data processing
+    "pandas>=1.3.0",
+    "scikit-learn>=1.0.0",
+    
+    # Utilities
+    "click>=8.0.0",
+    "rich>=12.0.0",
+    "typer>=0.7.0",
+    
+    # Reinforcement Learning
+    # vLLM is optional (`pip install 'agenttune[vllm]'`): it has no macOS wheels.
+    # Plain trl, not trl[vllm]: GRPO/RLOO import VLLMGeneration, and a CUDA-13 vLLM
+    # wheel crashes Colab (`libcudart.so.13`).
+    "trl==1.7.1",
+
+    # Agentic graph spine — `agenttune.decide.graph_runner.GraphRunner` imports
+    # `langgraph.graph.StateGraph` at module top level, and that module is pulled
+    # in transitively whenever anything imports `agenttune.agentic` (via
+    # heal_loop -> decide.closed_loop.contracts -> decide.__init__). So langgraph
+    # is a hard base dependency, not optional — without it every agentic import
+    # (incl. the RAG package's rollout_factory import) raises ModuleNotFoundError.
+    "langgraph>=0.2",
+
+    # Sandboxed OpenEnv harness driver. Folded into the base install (rather than kept
+    # as a `[openenv]` extra) so `pip install -e .` alone is enough — no second install
+    # step needed to run the OpenEnv notebook/examples.
+    "openenv>=0.3.1",
+    "httpx>=0.28.1",
+    "websockets>=15.0.1",
+    # colored console logging (utils/colored_logging.py)
+    "colorama>=0.4.6",
+    # decide/destinations/webhook_sender.py calls out over HTTP unconditionally
+    "requests>=2.28.0",
+
+    # Logging and monitoring
+    "wandb>=0.15.0",
+    "tensorboard>=2.12.0",
+    "matplotlib>=3.5.0",
+    # Colab GPU ships a complete pillow==11.3.0 (pip-freeze.gpu.txt). 12.0.0
+    # dropped PIL._typing._Ink; requiring 12.1.1+ makes uv overlay 12.x Python
+    # onto that 11.3 _imaging binary. Stay on 11.x so the pair stays matched.
+    "pillow>=11.3.0,<12",
+
+    # Evaluation metrics
+    "evaluate>=0.4.0",
+    "rouge-score>=0.1.2",
+    "lm-eval>=0.4.0",
+    "nltk>=3.8.0",
+    # Real embedder for agentic.memory_vector.VectorMemory (examples/vector_memory_real.py,
+    # tests/test_memory_vector_real.py) and EvaluationConfig.compute_semantic_similarity.
+    "sentence-transformers>=2.2.0",
+
+    # Agentic RAG package (src/agenttune/rag/): retrieval backends, document loaders,
+    # synthesis pipeline dataset I/O + entity graph, and the optional Groq judge client.
+    "chromadb>=0.5.0",
+    "langchain-text-splitters>=0.3.0",
+    "beautifulsoup4>=4.12.0",
+    "python-docx>=1.0.0",
+    "python-pptx>=0.6.23",
+    # 0.11.10 requires Pillow>=12.2.0, which would overlay 12.x on Colab's 11.3.
+    "pdfplumber>=0.10.0,<0.11.10",
+    "pyarrow>=14.0.0",
+    "networkx>=3.0",
+    "groq>=0.9.0",
+
+    # Extra evaluation metrics beyond ROUGE/BLEU/perplexity. jsonschema validates structured
+    # trajectory output (eval/agentic/trajectory_eval.py); codebleu scores code-generation
+    # tasks (core/sft/evaluator.py); bert-score is used by trajectory_eval.py,
+    # core/sft/evaluator.py, and decide/closed_loop/contracts.py.
+    "jsonschema>=4.0.0",
+    "codebleu>=0.1.0",
+    "bert-score>=0.3.13",
+
+    # PostgreSQL DECIDE destination (decide/destinations/postgres_writer.py).
+    "psycopg2-binary>=2.9.0",
+]
+
+[project.optional-dependencies]
+# Optional: FlashAttention-2, checked by utils/environment.py's diagnostics. Not declared
+# as a normal dependency because it needs a CUDA toolchain and typically has to be installed
+# with `pip install flash-attn --no-build-isolation`; plain `pip install agenttune[flash-attn]`
+# may fail on machines without a matching CUDA/torch build.
+# Enables: pip install 'agenttune[flash-attn]'
+flash-attn = [
+    "flash-attn>=2.5.0",
+]
+
+# Optional: vLLM generation (`use_vllm=True`, the vllm rollout engine / judge / eval
+# backends). Linux + CUDA only. trl[vllm]==1.7.1 allows vllm>=0.14,<=0.23; with torch==2.11.0
+# it resolves to vllm 0.22.1.
+# Enables: pip install 'agenttune[vllm]'
+vllm = [
+    "trl[vllm]==1.7.1",
+]
+
+# Optional: contributor tooling (test runners, linters, formatters, git hooks). Matches the
+# [tool.pytest.ini_options]/[tool.ruff]/[tool.black]/[tool.mypy]/[tool.bandit] config below.
+# Enables: pip install 'agenttune[dev]'
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "pytest-xdist>=3.0.0",
+    "pytest-mock>=3.10.0",
+    "pytest-timeout>=2.1.0",
+    "hypothesis>=6.70.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "ruff>=0.4.0",
+    "mypy>=1.5.0",
+    "bandit>=1.7.0",
+    "pre-commit>=3.0.0",
+]
+
+# Optional: the agentic spine's FastAPI + WebSocket service (agentic/service/app.py).
+# The core spine (Project, strategies, memory, harness, eval, distill, heal) is pure-Python
+# and needs none of this — only the live demo backend does.
+# Enables: pip install 'agenttune[service]'
+service = [
+    "fastapi>=0.110.0",
+    "uvicorn>=0.29.0",
+    "websockets>=15.0.1",
+]
+
+# Optional: build the documentation site. `mkdocs build --strict` passes clean with these.
+# Enables: pip install 'agenttune[docs]' && mkdocs build --strict
+docs = [
+    "mkdocs>=1.6,<2",
+    "mkdocs-material>=9.5,<10",
+    "pymdown-extensions>=10,<11",
+]
+
+[project.urls]
+Homepage = "https://github.com/Lexsi-Labs/AgentTune"
+Repository = "https://github.com/Lexsi-Labs/AgentTune"
+Documentation = "https://agenttune.lexsi.ai/"
+"Bug Tracker" = "https://github.com/Lexsi-Labs/AgentTune/issues"
+"Changelog" = "https://github.com/Lexsi-Labs/AgentTune/blob/main/CHANGELOG.md"
+"Discussions" = "https://github.com/Lexsi-Labs/AgentTune/discussions"
+
+[project.scripts]
+agenttune = "agenttune.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"agenttune" = [
+    "*.yaml",
+    "*.yml",
+    "*.json",
+    "*.md",
+    "*.txt",
+    "py.typed",
+    # Configuration files
+    "configs/*.yaml",
+    "configs/*.yml",
+    "configs/*.json",
+    # SFT configurations
+    "sft/*.yaml",
+    "sft/*.yml",
+    "sft/*.json",
+    # RL configurations
+    "rl/*.yaml",
+    "rl/*.yml",
+    "rl/*.json",
+    # Backend configurations
+    "backends/*/*.yaml",
+    "backends/*/*.yml",
+    "backends/*/*.json",
+    # (Excluded examples/tests/docs from package to keep library lean)
+    # CLI configurations
+    "cli/*.yaml",
+    "cli/*.yml",
+    "cli/*.json",
+    # Evaluation configurations
+    "eval/*.yaml",
+    "eval/*.yml",
+    "eval/*.json",
+    # Reward configurations
+    "rewards/*.yaml",
+    "rewards/*.yml",
+    "rewards/*.json",
+    # Decide module templates and configuration
+    "decide/templates/**/*.yaml",
+    "decide/templates/**/*.yml",
+    "decide/config.example.yaml",
+    # Agentic service operator UI (served by agentic/service/app.py's `/` route)
+    "agentic/service/static/*",
+    # Packaged Hub-card logos (brand_hf_repo)
+    "assets/*.png",
+]
+
+
+# Black configuration
+[tool.black]
+line-length = 100
+target-version = ['py312']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+  | __pycache__
+)/
+'''
+
+# isort configuration
+[tool.isort]
+profile = "black"
+line_length = 100
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+known_first_party = ["agenttune"]
+known_third_party = [
+    "torch", 
+    "transformers", 
+    "datasets", 
+    "accelerate",
+    "peft",
+    "trl",
+    "wandb",
+    "numpy",
+    "pandas"
+]
+
+# mypy configuration
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+strict_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "trl.*",
+    "wandb.*",
+    "tensorboard.*",
+    "evaluate.*",
+]
+ignore_missing_imports = true
+
+# pytest configuration
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+addopts = [
+    "--cov=src/agenttune",
+    "--cov-report=html",
+    "--cov-report=term-missing",
+    "--cov-report=xml",
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+    "-v"
+]
+filterwarnings = [
+    "ignore::UserWarning",
+    "ignore::DeprecationWarning",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "gpu: marks tests that require GPU",
+    "wandb: marks tests that require WandB",
+    "asyncio: marks tests as async tests",
+    "openenv: marks tests that exercise the OpenEnv sandbox (openenv is a base dependency)",
+    "qwen_e2e: marks end-to-end closed-loop tests that load a Qwen model (needs GPU/CPU RAM; deselect with '-m \"not qwen_e2e\"')",
+]
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["src/agenttune"]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "*/__init__.py",
+    "*/examples/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+
+# Ruff configuration (modern linter alternative to flake8)
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = [
+    "E501",  # line too long, handled by black
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+    "E402",  # module level import not at top of file (examples/ and tests/)
+    "E741",  # ambiguous variable name 'l'
+    "B027",  # empty method in abstract base class
+    "B028",  # no explicit stacklevel keyword argument
+    "B024",  # abstract base class without abstract methods
+    "B017",  # pytest.raises(Exception)
+    "B007",  # loop control variable not used
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["agenttune"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "F403", "F405"]
+"tests/*" = ["B011"]
+"src/agenttune/agentic/rewards/builtin_rewards/*" = ["F403", "F405"]
+"src/agenttune/langgraph/*" = ["F403", "F405"]
+"src/agenttune/eval/lm_eval_integration.py" = ["F811"]
+"src/agenttune/eval/runner.py" = ["F401"]
+"src/agenttune/backends/unsloth/sft/sft.py" = ["F401"]
+
+
+# Bandit security linting
+[tool.bandit]
+
+exclude_dirs = ["tests", "examples"]
+skips = ["B101", "B601"]

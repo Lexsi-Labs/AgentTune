@@ -1,0 +1,223 @@
+# AgentTune Trainer Config — full reference
+#
+# Works in tandem with config.example.yaml (the decide pipeline config).
+# When run_mode: train in config.yaml, this file drives the training loop.
+#
+# Two usage paths:
+#
+#   Path A — standalone training (bring your own dataset):
+#       from agenttune.decide.trainer_config_bridge import build_trainer_from_yaml
+#       trainer = build_trainer_from_yaml("trainer_config.yaml", train_dataset=my_ds)
+#       trainer.train()
+#
+#   Path B — decide-driven training (collect from audit, then train):
+#       Set decide_bridge.enabled: true and run_mode: train in config.yaml.
+#       agenttune decide run --template bfsi/kyc_triage --mode train
+#
+# Copy to trainer_config.yaml and fill in your values (git-ignore it).
+# Every section maps to a phase in DECIDE_PLAN.md.
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Phase 1: Algorithm selection
+# ──────────────────────────────────────────────────────────────────────────────
+training:
+  algorithm: grpo             # grpo | ppo | dpo | rloo | bco
+  model: Qwen/Qwen3-1.7B     # HuggingFace model ID or local path
+  output_dir: ./output/grpo_run
+  max_steps: 100
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Phase 2: Rollout engine
+  # ────────────────────────────────────────────────────────────────────────────
+  rollout:
+    backend: api              # transformers | vllm | api
+
+    # --- API backend (Groq, OpenAI, Ollama, any OpenAI-compatible endpoint) ---
+    api_model: llama-3.3-70b-versatile   # model name without provider prefix
+    api_base_url: https://api.groq.com/openai/v1
+    api_key: ${GROQ_API_KEY}             # resolved from env var at runtime
+
+    # --- transformers backend ---
+    # model_path: Qwen/Qwen3-0.6B
+
+    # --- vllm backend ---
+    # model_path: Qwen/Qwen3-1.7B
+    # gpu_memory_utilization: 0.4
+
+    max_steps: 3              # max agentic steps per rollout
+    system_prompt: |
+      You are a helpful assistant. Always use tools to answer questions.
+      Never guess — call the tool and use its result in your answer.
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Phase 3: Tools
+  # ────────────────────────────────────────────────────────────────────────────
+  tools:
+    - name: sql_query
+      type: builtin_sql
+      connection: sqlite:///./data/biogrid.db
+
+    - name: web_search
+      type: builtin_web_search
+
+    - name: python_runner
+      type: builtin_code
+
+    - name: file_reader
+      type: builtin_file
+
+    - name: bash_runner
+      type: builtin_bash
+
+    # Custom tool:
+    # - name: my_tool
+    #   type: custom
+    #   module: my_package.my_module
+    #   class: MyTool
+    #   init_kwargs:
+    #     param1: value1
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Phase 4: Reward functions + LLM judge
+  # ────────────────────────────────────────────────────────────────────────────
+  reward_funcs:
+    - correctness_reward        # named builtin
+    - structure_reward
+    - query_reward
+    # - my_package.rewards.custom_reward   # module.function path
+
+  judge:
+    model: llama-3.1-8b-instant
+    base_url: https://api.groq.com/openai/v1
+    api_key: ${GROQ_API_KEY}
+    system_prompt: |
+      You are a strict research quality reviewer.
+      Score the agent trajectory from 0.0 to 1.0 based on:
+        factual accuracy (50%), completeness (30%), conciseness (20%).
+      A failed or incomplete trajectory must score below 0.3.
+      Respond ONLY with JSON: {"score": <float 0-1>, "explanation": "<one sentence>"}
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Phase 5: Multi-agent AgentTuneGraph (optional)
+  # ────────────────────────────────────────────────────────────────────────────
+  multi_agent:
+    enabled: false            # set true to activate
+
+    rollouts:
+      - name: tool_agent
+        backend: api
+        api_model: llama-3.3-70b-versatile
+        api_base_url: https://api.groq.com/openai/v1
+        api_key: ${GROQ_API_KEY}
+        max_steps: 5
+        system_prompt: "You are a tool-calling agent."
+
+      - name: code_agent
+        backend: api
+        api_model: llama-3.1-8b-instant
+        api_base_url: https://api.groq.com/openai/v1
+        api_key: ${GROQ_API_KEY}
+        max_steps: 3
+        system_prompt: "You are a code-generation agent."
+
+    # Python expression: receives `prompts` list, returns rollout node name
+    router: "'code_agent' if '```' in prompts[0] else 'tool_agent'"
+
+    judges:
+      - name: quality
+        model: llama-3.1-8b-instant
+        base_url: https://api.groq.com/openai/v1
+        api_key: ${GROQ_API_KEY}
+        aggregation: mean
+
+      - name: strict
+        model: llama-3.1-8b-instant
+        base_url: https://api.groq.com/openai/v1
+        api_key: ${GROQ_API_KEY}
+        system_prompt: "You are a strict evaluator. Score 0.0–1.0."
+        aggregation: min
+
+    final_aggregation: min    # min | mean | max
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Phase 6: PEFT / LoRA  (dict-style — no peft import needed)
+  # ────────────────────────────────────────────────────────────────────────────
+  peft_config:
+    r: 16
+    lora_alpha: 32
+    lora_dropout: 0.05
+    bias: none
+    task_type: CAUSAL_LM
+    target_modules: [q_proj, k_proj, v_proj, o_proj]
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Training hyperparameters (forwarded to GRPOConfig / PPOConfig / etc.)
+  # ────────────────────────────────────────────────────────────────────────────
+  hyperparams:
+    num_generations: 2
+    max_completion_length: 1024
+    per_device_train_batch_size: 2
+    gradient_accumulation_steps: 4
+    learning_rate: 1.0e-6
+    use_vllm: false
+    vllm_mode: colocate       # colocate | server
+    log_completions: true
+    report_to: none
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Decide Bridge — extract training data from audit logs
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# When enabled, build_trainer() automatically extracts a training dataset
+# from the decide audit log instead of requiring a pre-built dataset.
+#
+# Algorithm → data source mapping:
+#   dpo   → human_feedback: rejected records (human_review stage rejections)
+#   bco   → APPROVE/DENY verdicts from output stages
+#   grpo  → full execution traces + judge scores
+#   ppo   → per-step traces with intermediate rewards
+#   rloo  → batch run outputs for leave-one-out baseline
+#
+decide_bridge:
+  enabled: false                # true = auto-extract dataset from audit.jsonl
+  audit_path: ./audit.jsonl    # path to the decide audit log
+
+  # Which stage's I/O to use as training data.
+  # null = use the output stage (verdict-level signals)
+  # Specify a stage_id for per-stage model training (e.g., "income_agent").
+  stage_id: null
+
+  # Algorithm override — if null, inherits from training.algorithm
+  algorithm: null               # null | dpo | bco | grpo | ppo | rloo
+
+  # Minimum records in audit before extraction is attempted
+  min_records: 50
+
+  # Per-algorithm quality filters
+  filters:
+    dpo:
+      require_human_feedback: true     # only include records with human correction
+      min_score_gap: 2                 # chosen score must exceed rejected by this much
+    bco:
+      require_verdict: true            # only APPROVE/DENY records (skip PENDING)
+    grpo:
+      min_judge_score: 0.0             # include all judge scores
+      max_judge_score: 1.0
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Eval Config — run against a labelled test set before/after training
+# ──────────────────────────────────────────────────────────────────────────────
+eval:
+  enabled: false
+  test_set: null                # path to JSONL: {input, expected_verdict}
+  metrics: [accuracy, latency_p50, latency_p95, cost_per_decision, judge_score_mean]
+  thresholds:
+    accuracy: 0.80
+    latency_p95: 5000           # ms
+    cost_per_decision: 0.10     # USD
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Audit Config — mirrors decide config.yaml audit section
+# ──────────────────────────────────────────────────────────────────────────────
+audit:
+  path: ./audit.jsonl

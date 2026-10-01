@@ -1,0 +1,196 @@
+site_name: AgentTune
+site_description: Train, evaluate, distill, and self-heal tool-using LLM agents — a TRL-backed RL trainer with an agentic integration spine.
+site_url: https://agenttune.lexsi.ai/
+repo_name: Lexsi-Labs/AgentTune
+repo_url: https://github.com/Lexsi-Labs/AgentTune
+# Disable "Edit on ..." link: this repo's docs/ tree layout differs from the branch
+# branch layout doesn't match this checkout's docs/ tree.
+edit_uri: ""
+copyright: >
+  Copyright &copy; 2026 <a href="https://lexsi.ai" target="_blank" rel="noopener">Lexsi Labs</a>
+
+theme:
+  name: material
+  logo: assets/agenttune-logo-white.png
+  favicon: assets/agenttune-logo-black.png
+  font:
+    text: Schibsted Grotesk
+    code: IBM Plex Mono
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - navigation.prune
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - tables
+  - toc:
+      permalink: true
+
+extra_css:
+  - assets/extra.css
+
+extra_javascript:
+  - assets/extra.js
+
+# Many docs pages link to repo source (../src, ../../tests) and upstream-only paths that
+# resolve on GitHub but live outside the built site tree. Keep nav validation honest; treat
+# those cross-tree links as info so a clean `mkdocs build --strict` still passes.
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+    absolute_links: warn
+  links:
+    not_found: info
+    anchors: info
+    absolute_links: info
+    unrecognized_links: info
+
+# Note: this is the spine-focused AgentTune repo. The nav lists only the
+# pages that live in this repo; a generated per-module API reference (mkdocstrings) and the
+# full upstream user guide are future work.
+nav:
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+    - Basic Concepts: getting-started/basic-concepts.md
+    - Backend Selection: getting-started/backend-selection.md
+  - User Guide:
+    - Overview: user-guide/overview.md
+    - Agentic Spine: user-guide/agentic-spine.md
+    - RL Training: user-guide/rl-training.md
+    - Distillation: user-guide/distillation.md
+    - DECIDE Workflows: user-guide/decide-workflows.md
+    - Self-Healing: user-guide/self-healing.md
+    - Multi-Agent Orchestration: user-guide/multi-agent-orchestration.md
+    - Evaluation: user-guide/evaluation.md
+    - RAG & Data Synthesis: user-guide/rag-and-synthesis.md
+    - Tool Library: user-guide/tool-library.md
+    - Troubleshooting: user-guide/troubleshooting.md
+  - Algorithms:
+    - Overview: algorithms/overview.md
+    - GRPO: algorithms/grpo.md
+    - DPO: algorithms/dpo.md
+    - PPO: algorithms/ppo.md
+    - RLOO: algorithms/rloo.md
+    - BCO: algorithms/bco.md
+  - API Reference:
+    - Configuration: reference/configuration.md
+    - CLI: reference/cli.md
+    - Architecture: reference/architecture.md
+    - Core API & Backend Factory: reference/core-api.md
+    - Unified SDK: reference/unified-sdk.md
+    - Rollout Engines: reference/rollout-engines.md
+    - Tools Reference: reference/tools-reference.md
+    - Rewards Reference: reference/rewards-reference.md
+    - Memory Reference: reference/memory-reference.md
+    - Configuration Classes: reference/configuration-classes.md
+    - Model Management: reference/model-management.md
+    - Sample Logging & Audit Trail: reference/sample-logging.md
+    - DECIDE Engine: reference/decide-engine.md
+    - Self-Healing Closed Loop: reference/closed-loop.md
+    - Data & Utilities: reference/data-and-utils.md
+  - Advanced Topics:
+    - EventLog Schema: advanced/eventlog-schema.md
+    - Trajectory Evaluation Metrics: advanced/trajectory-metrics.md
+    - Reward Hacking Defenses: advanced/reward-hacking-defenses.md
+    - Tool Isolation & Sandboxing: advanced/tool-isolation.md
+    - Production Compositions: advanced/production-compositions.md
+  - Concepts:
+    - DECIDE & the Closed Loop: concepts/decide-and-closed-loop.md
+  - Tutorials:
+    - Features: features.md
+    - Sample Notebook: notebooks/sample-notebook.md
+    - Local Notebook: notebooks/local-notebook.md
+  - Community:
+    - FAQ: community/faq.md
+    - Roadmap: community/roadmap.md
+    - Known Issues: community/known-issues.md
+    - Changelog: community/changelog.md
+    - Contributing: community/contributing.md
+    - Code of Conduct: community/CODE_OF_CONDUCT.md
+    - Security: community/security.md
+
+# Built and reachable by link, but intentionally kept out of the nav.
+not_in_nav: |
+  README.md
+  branding/README.md
+
+extra:
+  version:
+    provider: mike
+    default: latest
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Lexsi-Labs/AgentTune
+      name: AgentTune on GitHub
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/agenttune/
+      name: AgentTune on PyPI
+    - icon: fontawesome/brands/github
+      link: https://github.com/Lexsi-Labs
+      name: Lexsi Labs on GitHub
+    - icon: fontawesome/brands/x-twitter
+      link: https://x.com/Lexsi_labs
+      name: Lexsi Labs on X
+    - icon: fontawesome/brands/linkedin
+      link: https://www.linkedin.com/company/lexsi-labs/
+      name: Lexsi Labs on LinkedIn
+    - icon: simple/huggingface
+      link: https://huggingface.co/Lexsi
+      name: Lexsi Labs on Hugging Face
+    - icon: fontawesome/solid/globe
+      link: https://lexsi.ai
+      name: lexsi.ai
+
+plugins:
+  - search

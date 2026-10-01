@@ -1,0 +1,35 @@
+extends: ../../../../../config.yaml
+
+name: "SYNTHETIC DATA GEN"
+id: "generic/synthetic_data_gen"
+version: "1.0.0"
+description: |
+  Generic decision pipeline for synthetic_data_gen.
+tags: ["generic"]
+compliance_note: "Domain-agnostic template."
+
+max_total_steps: 30
+
+stages:
+  - id: process
+    type: llm_call
+    description: "Generate synthetic data"
+    prompt: |
+      Generate synthetic data samples based on the following specification:
+      Respond ONLY with valid JSON (no markdown, no code blocks): {"samples": [...], "verdict": "PASS" | "FAIL", "count": <number>}
+
+      Specification: {input_text}
+    output_schema:
+      type: object
+      properties:
+        samples: {type: array, items: {type: object}}
+        verdict: {type: string, enum: ["PASS", "FAIL"]}
+        count: {type: integer, minimum: 0}
+      required: [samples, verdict]
+    next: output_stage
+
+  - id: output_stage
+    type: output
+    description: "Final output with generated data"
+    verdict_field: "process.output.verdict"
+    destinations: [file]

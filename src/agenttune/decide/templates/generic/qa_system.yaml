@@ -1,0 +1,36 @@
+extends: ../../../../../config.yaml
+
+name: "QA SYSTEM"
+id: "generic/qa_system"
+version: "1.0.0"
+description: |
+  Generic decision pipeline for qa_system.
+tags: ["generic"]
+compliance_note: "Domain-agnostic template."
+
+max_total_steps: 30
+
+stages:
+  - id: process
+    type: llm_call
+    description: "Answer question"
+    prompt: |
+      Answer the following question based on the provided context.
+      Respond ONLY with valid JSON (no markdown, no code blocks): {"answer": "...", "verdict": "PASS" | "FAIL", "confidence": <0-10>}
+
+      Context: {input_text}
+    output_schema:
+      type: object
+      properties:
+        answer: {type: string}
+        verdict: {type: string, enum: ["PASS", "FAIL"]}
+        confidence: {type: integer, minimum: 0, maximum: 10}
+      required: [answer, verdict]
+    next: output_stage
+
+  - id: output_stage
+    type: output
+    description: "Final output with answer"
+    verdict_field: "process.output.verdict"
+    confidence_field: "process.output.confidence"
+    destinations: [file]

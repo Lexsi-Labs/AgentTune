@@ -1,0 +1,29 @@
+extends: ../../../../../config.yaml
+
+name: "CUSTOMER RISK RATING"
+id: "bfsi/customer_risk_rating"
+version: "1.0.0"
+description: |
+  BFSI decision pipeline for customer_risk_rating.
+tags: ["bfsi"]
+compliance_note: "Compliant with regulatory requirements."
+
+max_total_steps: 30
+
+stages:
+  - id: start
+    type: llm_call
+    description: "Initial processing stage"
+    prompt: "Process input: {input_text}"
+    output_schema:
+      type: object
+      properties:
+        result: {type: string}
+    next: output_stage
+
+  - id: output_stage
+    type: output
+    description: "Final output"
+    verdict: COMPLETE
+    verdict_label: "processed"
+    destinations: [file]

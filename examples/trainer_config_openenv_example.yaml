@@ -1,0 +1,62 @@
+# trainer_config_openenv_example.yaml
+#
+# Example AgentTune trainer config using a remote OpenEnv sandboxed tool.
+#
+# Prerequisites:
+#   pip install 'agenttune[openenv]'
+#   # Start an OpenEnv server (echo_env for testing, coding_env for production):
+#   cd /tmp/OpenEnv/envs/echo_env && uvicorn server.app:app --port 8000
+#
+# Usage:
+#   from agenttune.decide.trainer_config_bridge import TrainerConfigBridge
+#   bridge = TrainerConfigBridge("trainer_config_openenv_example.yaml")
+#   trainer = bridge.build_trainer(train_dataset=my_dataset)
+#   try:
+#       trainer.train()
+#   finally:
+#       bridge.close_openenv_handles()
+
+training:
+  algorithm: grpo
+  model: Qwen/Qwen3-0.6B-FP8
+  output_dir: ./output_openenv
+
+  rollout:
+    backend: transformers
+    max_steps: 3
+    system_prompt: |
+      You are a helpful assistant with access to remote sandboxed tools.
+      Use the available tools to complete tasks safely.
+
+  # Mix of local and remote tools
+  tools:
+    # Local built-in tools (run in the training process — use sparingly)
+    - type: builtin_file
+
+    # Remote OpenEnv tool (runs in isolated container — recommended for code execution)
+    - type: openenv
+      base_url: "${OPENENV_BASE_URL:-http://localhost:8000}"
+      name_prefix: "sandbox_"      # prevents name collision with local builtins
+      # tool_filter:               # uncomment to wrap only specific tools
+      #   - run_code
+      #   - run_bash
+      connect_timeout_s: 10        # timeout to establish WebSocket connection
+      message_timeout_s: 60        # per-call timeout (set >= your tool's expected runtime)
+
+  hyperparams:
+    num_train_epochs: 1
+    per_device_train_batch_size: 2
+    num_generations: 4
+    max_completion_length: 512
+    learning_rate: 5.0e-6
+
+  reward_funcs:
+    - correctness_reward
+
+  peft_config:
+    r: 8
+    lora_alpha: 16
+    target_modules: ["q_proj", "v_proj"]
+    lora_dropout: 0.05
+    bias: none
+    task_type: CAUSAL_LM

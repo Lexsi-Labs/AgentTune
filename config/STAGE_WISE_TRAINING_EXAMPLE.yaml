@@ -1,0 +1,114 @@
+# Stage-Wise Training Configuration
+# ======================================
+# This shows how to use AgentTune DECIDE for stage-wise training,
+# emulating OpenEnv-style epoch-based workflows.
+#
+# Users just define YAML - everything else is abstracted!
+
+# 1. Inherit from global config
+extends: ./config.yaml
+
+# 2. Use a DECIDE template or custom config
+name: "Stage-Wise Training Pipeline"
+id: "training/stage_wise_grpo"
+description: "Train an agent using DECIDE for routing and evaluation across multiple stages"
+
+# 3. Configure for training mode
+run_mode: train_stage_wise
+
+# 4. Stage-wise training settings
+num_epochs: 5
+
+# 5. Episode/data collection settings
+episode:
+  n_episodes: 100        # per epoch
+  batch_size: 4          # parallel collection
+  shuffle_inputs: true
+  seed: 42
+
+# 6. Collect configuration (COLLECT stage)
+collect:
+  algorithm: grpo                               # grpo | dpo | bco | ppo | rloo
+  stage_id: null                                # null = use final verdict
+  min_samples: 50                               # per epoch
+  output_path: ./epochs/epoch_{epoch}/collected_data.jsonl
+  auto_train: false                             # we'll manually train
+
+# 7. Training integration (TRAIN stage)
+training:
+  trainer_config: ./trainer_config.yaml         # bridge to GRPO trainer
+  auto_deploy: false                            # deploy after training
+  deploy_stage_id: null
+
+# 8. Reward configuration (EVALUATE stage)
+reward:
+  default_fn: verdict_binary
+  normalize: true
+  scale: [0.0, 1.0]
+  judge_as_reward:
+    enabled: true
+    model: "Qwen/Qwen2.5-0.5B-Instruct"
+    weight: 1.0
+
+# 9. Output destinations (for audit trail)
+audit:
+  destination: file
+  path: ./audit.jsonl
+
+destinations:
+  file:
+    enabled: true
+    path: ./epochs/epoch_{epoch}/decisions.jsonl
+    format: jsonl
+
+# 10. DECIDE pipeline stages (for routing/evaluation)
+stages:
+  - id: analyze
+    type: llm_call
+    description: "Analyze the input"
+    prompt: "Analyze: {input_text}"
+    next: evaluate
+
+  - id: evaluate
+    type: llm_judge
+    description: "Evaluate quality"
+    prompt: "Rate this output quality from 0-10"
+    output_schema:
+      type: object
+      properties:
+        score: {type: number, minimum: 0, maximum: 10}
+        feedback: {type: string}
+    next: output
+
+  - id: output
+    type: output
+    verdict: COMPLETE
+    verdict_label: "Stage-wise training complete"
+    destinations: [file]
+
+---
+# EXAMPLE USAGE (in Python)
+#
+# from agenttune.decide.graph_runner import GraphRunner
+# from agenttune.decide.stage_wise_runner import StageWiseRunner
+# import asyncio
+#
+# async def main():
+#     # Load config
+#     runner = GraphRunner.from_config("STAGE_WISE_TRAINING_EXAMPLE.yaml")
+#
+#     # Define training inputs
+#     inputs = [
+#         "Question 1...",
+#         "Question 2...",
+#         # ... more inputs
+#     ]
+#
+#     # Run stage-wise training
+#     stage_runner = StageWiseRunner(runner, inputs)
+#     results = await stage_runner.run_stage_wise(num_epochs=5)
+#
+#     # Print summary
+#     stage_runner.print_summary()
+#
+# asyncio.run(main())

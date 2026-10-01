@@ -1,0 +1,48 @@
+extends: ../../../../../config.yaml
+
+name: "CONDITIONAL ROUTING"
+id: "example/conditional_routing"
+version: "1.0.0"
+description: "Support ticket routing - classify then route to destination"
+tags: ["example", "routing"]
+
+max_total_steps: 5
+
+stages:
+  # Step 1: Classify the ticket and determine routing
+  - id: classify_and_route
+    type: llm_call
+    model: "Qwen/Qwen2.5-1.5B-Instruct"
+    prompt: |
+      Classify this support ticket.
+
+      Ticket: {input_text}
+
+      Pick the SINGLE best classification:
+      - URGENT if: hacked, breached, compromised, lost money, security
+      - COMPLAINT if: angry, terrible, bad, wants refund, dissatisfied
+      - QUESTION if: how to, help, why, password reset, ask
+
+      Respond with ONLY this JSON:
+      {"classification": "URGENT", "destination": "escalate_human"} OR
+      {"classification": "COMPLAINT", "destination": "feedback_team"} OR
+      {"classification": "QUESTION", "destination": "faq_bot"}
+
+    output_schema:
+      type: object
+      properties:
+        classification:
+          type: string
+        destination:
+          type: string
+      required: ["classification", "destination"]
+
+    temperature: 0.0
+    max_tokens: 100
+    next: output_decision
+
+  # Step 2: Output the final verdict with routing information
+  - id: output_decision
+    type: output
+    verdict_field: "classify_and_route.classification"
+    next_stage_field: "classify_and_route.destination"

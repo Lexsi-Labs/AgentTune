@@ -1,0 +1,36 @@
+extends: ../../../../../config.yaml
+
+name: "SUMMARIZE"
+id: "generic/summarize"
+version: "1.0.0"
+description: |
+  Generic decision pipeline for summarize.
+tags: ["generic"]
+compliance_note: "Domain-agnostic template."
+
+max_total_steps: 30
+
+stages:
+  - id: process
+    type: llm_call
+    description: "Summarize the text"
+    prompt: |
+      Create a concise summary of the following text in 1-2 sentences.
+      Respond ONLY with valid JSON (no markdown, no code blocks): {"summary": "...", "verdict": "PASS" | "FAIL", "confidence": <0-10>}
+
+      Text: {input_text}
+    output_schema:
+      type: object
+      properties:
+        summary: {type: string}
+        verdict: {type: string, enum: ["PASS", "FAIL"]}
+        confidence: {type: integer, minimum: 0, maximum: 10}
+      required: [summary, verdict]
+    next: output_stage
+
+  - id: output_stage
+    type: output
+    description: "Final output with summary"
+    verdict_field: "process.output.verdict"
+    confidence_field: "process.output.confidence"
+    destinations: [file]

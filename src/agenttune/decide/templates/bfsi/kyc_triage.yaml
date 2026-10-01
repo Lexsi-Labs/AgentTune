@@ -1,0 +1,343 @@
+extends: ../../../../../config.yaml
+
+name: "KYC Triage"
+id: "bfsi/kyc_triage"
+version: "1.1.0"
+description: |
+  Triage Know-Your-Customer documents: extract, validate, run parallel agent analysis,
+  judge the decision, and route to APPROVE / manual review / DENY.
+
+  Supports all four AgentTune Decide execution modes:
+    inference — single-shot triage decision
+    collect   — run N episodes, write DPO pairs for fine-tuning income_agent / decision_judge
+    eval      — benchmark accuracy and latency against labelled test set
+    train     — collect until min_samples, then auto-train via trainer_config.yaml
+
+tags: ["kyc", "aml", "bfsi", "decision", "parallel"]
+compliance_note: "Compliant with AML/KYC regulatory requirements as of 2024-Q1"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Pipeline limits (override global max_total_steps from config.yaml)
+# ──────────────────────────────────────────────────────────────────────────────
+max_total_steps: 30
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Episode config — override global episode settings for this template.
+# Useful when this template needs more episodes for collect/eval than others.
+# ──────────────────────────────────────────────────────────────────────────────
+episode:
+  n_episodes: 100           # collect 100 episodes before training
+  batch_size: 4             # run 4 parallel pipeline instances
+  shuffle_inputs: true      # shuffle customer applications across episodes
+  seed: 42
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Observation schema — validates pipeline input format
+# ──────────────────────────────────────────────────────────────────────────────
+observation_schema:
+  type: string              # KYC document text (unstructured)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Reward config — per-stage and episode-level reward definitions
+#
+# Stage-level rewards are written to audit.jsonl alongside stage output.
+# Episode-level final_fn aggregates stage rewards into one training signal.
+# ──────────────────────────────────────────────────────────────────────────────
+reward:
+  stages:
+    decision_judge:
+      fn: judge_score         # normalized llm_judge score (0–10 → 0.0–1.0)
+      weight: 1.0
+    output_approve:
+      fn: verdict_binary      # 1.0 for APPROVE verdict
+      weight: 0.5
+    output_deny:
+      fn: verdict_binary      # 0.0 for DENY verdict (inverted binary)
+      weight: 0.5
+    output_human_review:
+      fn: verdict_binary      # 0.5 for REVIEW (ambiguous — human decides)
+      weight: 0.3
+
+  # How to combine per-stage rewards into a single episode reward
+  # weighted_mean | mean | min | max | last
+  final_fn: weighted_mean
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Collect config — which stage to extract training data from and which algorithm
+# ──────────────────────────────────────────────────────────────────────────────
+collect:
+  algorithm: dpo              # DPO pairs from human_review rejections
+  stage_id: decision_judge    # fine-tune the judge stage specifically
+  min_samples: 50
+  output_path: ./collected/kyc_triage_dpo.jsonl
+  auto_train: false           # set true to trigger training automatically
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Eval config — labelled test set for accuracy benchmarking
+# ──────────────────────────────────────────────────────────────────────────────
+eval:
+  test_set: null              # set to path of JSONL: {input, expected_verdict}
+  metrics: [accuracy, latency_p50, cost_per_decision, judge_score_mean]
+  thresholds:
+    accuracy: 0.85
+    latency_p95: 8000         # KYC allows up to 8s (more complex pipeline)
+    cost_per_decision: 0.20   # parallel agents cost more
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Destination overrides (postgres enabled for KYC compliance audit trail)
+# ──────────────────────────────────────────────────────────────────────────────
+destinations:
+  postgres:
+    enabled: true
+    table: kyc_decisions
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Pipeline stages
+# ──────────────────────────────────────────────────────────────────────────────
+stages:
+  # ── Stage 1: Extract structured fields from the KYC document ──────────────
+  - id: extract
+    type: llm_call
+    description: "Extract structured fields from unstructured KYC document"
+    prompt: |
+      Analyze the KYC document and extract the following fields as JSON:
+      - full_name (string)
+      - dob (string, format YYYY-MM-DD)
+      - ssn (string, last 4 digits only)
+      - address (string, full postal address)
+      - income (number, annual income in USD)
+      - employment (string, one of: employed | self_employed | unemployed | retired)
+
+      Document:
+      {input_text}
+
+      {feedback}
+    output_schema:
+      type: object
+      properties:
+        full_name: {type: string}
+        dob: {type: string}
+        ssn: {type: string}
+        address: {type: string}
+        income: {type: number}
+        employment: {type: string, enum: [employed, self_employed, unemployed, retired]}
+      required: [full_name, dob, address]
+    model: "Qwen/Qwen2.5-1.5B-Instruct"
+    max_iterations: 3
+    on_parse_error: extract   # loop back on JSON parse failure (up to max_iterations)
+    next: quality_check
+
+  # ── Stage 2: Deterministic quality gate (rules, no LLM cost) ─────────────
+  - id: quality_check
+    type: rules
+    description: "Validate extracted data meets minimum KYC requirements"
+    rules:
+      - condition: "dob != null and dob != ''"
+        on_fail:
+          goto: extract
+          inject: "Date of birth is required. Please re-extract it from the document."
+      - condition: "address != null and address != ''"
+        on_fail:
+          goto: extract
+          inject: "Residential address is required. Please re-extract it."
+      - condition: "income != null and income > 0"
+        on_fail:
+          goto: extract
+          inject: "Income field is missing or invalid (must be > 0). Please re-extract."
+    next: parallel_analysis
+
+  # ── Stage 3: Parallel expert agents (fan-out, rejoin) ────────────────────
+  - id: parallel_analysis
+    type: parallel
+    description: "Run three specialist agents concurrently: income, credit, compliance"
+    branches:
+      - id: income_agent
+        type: llm_call
+        description: "Verify income and assess financial stability"
+        prompt: |
+          Analyze the income verifiability for this KYC applicant.
+
+          Applicant data:
+          - Name: {extract.output.full_name}
+          - Income: {extract.output.income}
+          - Employment: {extract.output.employment}
+
+          Assess:
+          1. Is the stated income plausible given employment type?
+          2. What is the income verification risk?
+          3. Overall income score (0–10)
+
+          Respond ONLY with valid JSON (no markdown, no code blocks). Use EXACTLY these
+          three top-level keys and no others — do not nest them under another key or add
+          any others. For example, for a different applicant your reply would look like:
+          {"score": 6, "risk_level": "medium", "explanation": "Income is plausible for the stated role but unverified by pay stubs."}
+        output_schema:
+          type: object
+          properties:
+            score: {type: integer, minimum: 0, maximum: 10}
+            risk_level: {type: string, enum: [low, medium, high]}
+            explanation: {type: string}
+          required: [score, risk_level, explanation]
+        model: "Qwen/Qwen2.5-1.5B-Instruct"
+        max_iterations: 3
+
+      - id: credit_agent
+        type: llm_call
+        description: "Evaluate credit history and repayment risk"
+        prompt: |
+          Evaluate the credit and repayment risk for this applicant.
+
+          Applicant data:
+          - Name: {extract.output.full_name}
+          - Income: {extract.output.income}
+          - Employment: {extract.output.employment}
+
+          Assess:
+          1. Estimated credit risk based on profile
+          2. Repayment capacity given income
+          3. Overall credit score (0–10)
+
+          Respond ONLY with valid JSON (no markdown, no code blocks). Use EXACTLY these
+          three top-level keys and no others — do not nest them under another key or add
+          any others. For example, for a different applicant your reply would look like:
+          {"score": 7, "risk_level": "low", "explanation": "Repayment capacity is strong relative to reported income."}
+        output_schema:
+          type: object
+          properties:
+            score: {type: integer, minimum: 0, maximum: 10}
+            risk_level: {type: string, enum: [low, medium, high]}
+            explanation: {type: string}
+          required: [score, risk_level, explanation]
+        model: "Qwen/Qwen2.5-1.5B-Instruct"
+        max_iterations: 3
+
+      - id: compliance_agent
+        type: llm_call
+        description: "Check PEP status, sanctions flags, AML risk"
+        prompt: |
+          Perform a compliance and AML risk assessment for this applicant.
+
+          Applicant data:
+          - Name: {extract.output.full_name}
+          - DOB: {extract.output.dob}
+          - Address: {extract.output.address}
+
+          Assess:
+          1. PEP (Politically Exposed Person) risk
+          2. Sanctions and watchlist flags
+          3. AML risk indicators
+          4. Overall compliance risk level
+
+          Respond ONLY with valid JSON (no markdown, no code blocks). Use EXACTLY these
+          five top-level keys and no others — do not nest them under another key or add
+          any others. For example, for a different applicant your reply would look like:
+          {"pep_risk": "none", "sanctions_flags": [], "aml_risk": "low", "risk_level": "low", "explanation": "No PEP, sanctions, or AML flags found for this profile."}
+        output_schema:
+          type: object
+          properties:
+            pep_risk: {type: string, enum: [none, low, medium, high]}
+            sanctions_flags: {type: array, items: {type: string}}
+            aml_risk: {type: string, enum: [low, medium, high]}
+            risk_level: {type: string, enum: [low, medium, high]}
+            explanation: {type: string}
+          required: [pep_risk, aml_risk, risk_level, explanation]
+        model: "Qwen/Qwen2.5-1.5B-Instruct"
+        max_iterations: 3
+    next: decision_judge
+
+  # ── Stage 4: Decision judge with conditional routing ─────────────────────
+  - id: decision_judge
+    type: llm_judge
+    description: "Make final KYC decision based on all agent outputs"
+    prompt: |
+      You are a senior KYC compliance officer. Make a final decision based on all evidence.
+
+      === Applicant Profile ===
+      Name: {extract.output.full_name}
+      DOB: {extract.output.dob}
+      Address: {extract.output.address}
+      Income: {extract.output.income} ({extract.output.employment})
+
+      === Agent Analysis ===
+      Income Agent (score {income_agent.output.score}/10): {income_agent.output.explanation}
+      Credit Agent (score {credit_agent.output.score}/10): {credit_agent.output.explanation}
+      Compliance Risk: {compliance_agent.output.risk_level}
+        - PEP risk: {compliance_agent.output.pep_risk}
+        - AML risk: {compliance_agent.output.aml_risk}
+        - Flags: {compliance_agent.output.sanctions_flags}
+
+      === Decision ===
+      Based on all of the above, decide:
+      - decision: APPROVE (score 8–10), REVIEW (score 5–7), or DENY (score 0–4)
+      - score: overall confidence score 0–10
+      - explanation: one paragraph justifying the decision
+      - risk_factors: list of specific risk factors identified
+
+      If one or more specialist agents' analysis above is missing, empty, or unavailable,
+      you do not have enough evidence to confidently APPROVE or DENY -- route to REVIEW
+      (score 5-7) rather than defaulting to DENY. A missing analysis is a reason for a
+      compliance officer to look closer, not grounds for an automatic denial.
+
+      Respond ONLY with valid JSON (no markdown, no code blocks). Use EXACTLY these
+      four top-level keys and no others — do not nest them under another key:
+      {"decision": "APPROVE"|"REVIEW"|"DENY", "score": <0-10>, "explanation": "...", "risk_factors": ["..."]}
+    output_schema:
+      type: object
+      properties:
+        decision: {type: string, enum: [APPROVE, REVIEW, DENY]}
+        score: {type: integer, minimum: 0, maximum: 10}
+        explanation: {type: string}
+        risk_factors: {type: array, items: {type: string}}
+      required: [decision, score, explanation]
+    model: "Qwen/Qwen2.5-1.5B-Instruct"
+    max_iterations: 2
+    on_result:
+      - condition: "score >= 8"
+        goto: output_approve
+      - condition: "score >= 5 and score < 8"
+        goto: output_human_review
+      - condition: "score < 5"
+        goto: output_deny
+    on_fail: output_deny
+
+  # ── Terminal stages ───────────────────────────────────────────────────────
+  - id: output_approve
+    type: output
+    description: "KYC approved — meets all criteria"
+    verdict: APPROVE
+    verdict_label: "kyc_approved"
+    destinations: [file, postgres]
+
+  - id: output_human_review
+    type: human_review
+    description: "Route to compliance officer for manual review"
+    prompt_for_human: |
+      === KYC Manual Review Required ===
+
+      Applicant: {extract.output.full_name}
+      Income: {extract.output.income} ({extract.output.employment})
+      Judge Score: {decision_judge.output.score}/10
+
+      Agent Scores:
+        Income:     {income_agent.output.score}/10 ({income_agent.output.risk_level} risk)
+        Credit:     {credit_agent.output.score}/10 ({credit_agent.output.risk_level} risk)
+        Compliance: {compliance_agent.output.risk_level} risk
+
+      Judge Explanation:
+      {decision_judge.output.explanation}
+
+      Risk Factors:
+      {decision_judge.output.risk_factors}
+
+      Please Approve or Deny.
+    timeout_seconds: 86400      # 24-hour window for manual review
+    on_approved: output_approve
+    on_denied: output_deny
+    destinations: [file, postgres]
+
+  - id: output_deny
+    type: output
+    description: "KYC denied — does not meet criteria"
+    verdict: DENY
+    verdict_label: "kyc_denied"
+    destinations: [file, postgres]

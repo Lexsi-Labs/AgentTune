@@ -1,0 +1,94 @@
+# AgentTune - Base Dependencies
+#
+# This file is kept in sync with the `dependencies` list in pyproject.toml — that is the
+# source of truth; if the two drift, trust pyproject.toml. `pip install -e .` is the
+# recommended install path (also registers the `agenttune` CLI entry point); this file
+# exists for tooling/workflows that expect a plain requirements.txt.
+#
+# Optional extras (not included here — see pyproject.toml's [project.optional-dependencies]):
+#   pip install -e '.[service]'     # FastAPI + WebSocket demo backend
+#   pip install -e '.[docs]'        # build the documentation site
+#   pip install -e '.[dev]'         # test/lint/format tooling for contributors
+#   pip install -e '.[flash-attn]'  # FlashAttention-2 (needs --no-build-isolation)
+
+# Core ML dependencies
+# Pinned to 2.11.0, the version the optional vLLM stack resolves with (see pyproject.toml).
+torch==2.11.0
+# cohere_compass (North Micro Vision) imports torchvision.
+torchvision
+# 5.15 is the floor for cohere_compass; 5.17 is verified with the Cohere/Aya archs.
+transformers>=5.15,<6
+datasets>=2.14.0
+accelerate>=0.24.0
+peft>=0.6.0
+torchao>=0.17.0,<0.18
+bitsandbytes>=0.41.0
+compressed-tensors>=0.15.0
+
+# Core Python dependencies
+numpy>=1.21.0
+pydantic>=2.0.0
+pyyaml>=6.0
+huggingface-hub>=0.17.0
+tqdm>=4.64.0
+psutil>=5.9.0
+litellm
+asteval
+
+# Agentic graph spine (langgraph is a hard base dependency, not optional — see pyproject.toml)
+langgraph>=0.2
+langchain
+langchain-community
+
+# Data processing
+pandas>=1.3.0
+scikit-learn>=1.0.0
+
+# Utilities
+click>=8.0.0
+rich>=12.0.0
+typer>=0.7.0
+colorama>=0.4.6
+requests>=2.28.0
+
+# Reinforcement Learning
+# vLLM is optional: pip install 'agenttune[vllm]' (Linux + CUDA only).
+trl==1.7.1
+
+# Sandboxed OpenEnv harness driver
+openenv>=0.3.1
+httpx>=0.28.1
+websockets>=15.0.1
+
+# Logging and monitoring
+wandb>=0.15.0
+tensorboard>=2.12.0
+matplotlib>=3.5.0
+# Colab ships pillow 11.3; 12.x Python over its 11.3 binary breaks (see pyproject.toml).
+pillow>=11.3.0,<12
+
+# Evaluation metrics
+evaluate>=0.4.0
+rouge-score>=0.1.2
+lm-eval>=0.4.0
+nltk>=3.8.0
+sentence-transformers>=2.2.0
+
+# Agentic RAG package: retrieval backends, document loaders, synthesis pipeline
+chromadb>=0.5.0
+langchain-text-splitters>=0.3.0
+beautifulsoup4>=4.12.0
+python-docx>=1.0.0
+python-pptx>=0.6.23
+pdfplumber>=0.10.0,<0.11.10
+pyarrow>=14.0.0
+networkx>=3.0
+groq>=0.9.0
+
+# Extra evaluation metrics
+jsonschema>=4.0.0
+codebleu>=0.1.0
+bert-score>=0.3.13
+
+# PostgreSQL DECIDE destination
+psycopg2-binary>=2.9.0

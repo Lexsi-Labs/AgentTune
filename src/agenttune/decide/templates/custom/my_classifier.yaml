@@ -1,0 +1,48 @@
+extends: ../../../../../config.yaml
+
+name: "My Custom Classifier"
+id: "custom/my_classifier"
+version: "1.0.0"
+description: "Custom classifier with preprocessing and classification"
+
+max_total_steps: 5
+
+stages:
+  - id: preprocess
+    type: llm_call
+    model: "Qwen/Qwen2.5-1.5B-Instruct"
+    prompt: |
+      Extract key entities from this text:
+      {input_text}
+
+      Return JSON with: {"entities": [list of strings], "topic": "string"}
+    output_schema:
+      type: object
+      properties:
+        entities: {type: array, items: {type: string}}
+        topic: {type: string}
+      required: [entities, topic]
+    next: classify
+
+  - id: classify
+    type: llm_call
+    model: "Qwen/Qwen2.5-1.5B-Instruct"
+    prompt: |
+      Original text: {input_text}
+
+      Classify the sentiment as POSITIVE, NEGATIVE, or NEUTRAL.
+      Respond ONLY with JSON: {"classification": "POSITIVE", "confidence": 0.9}
+    output_schema:
+      type: object
+      properties:
+        classification: {type: string}
+        confidence: {type: number, minimum: 0, maximum: 1}
+      required: [classification, confidence]
+    temperature: 0.0
+    max_tokens: 50
+    next: output
+
+  - id: output
+    type: output
+    verdict_field: "classify.output.classification"
+    confidence_field: "classify.output.confidence"

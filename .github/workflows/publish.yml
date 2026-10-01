@@ -1,0 +1,50 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  pypi:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      SETUPTOOLS_SCM_PRETEND_VERSION: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Clean build artefacts
+        run: rm -rf dist build ./*.egg-info
+
+      - name: Syntax checks
+        run: |
+          python -m pip install --upgrade pip
+          python -m compileall -q src/ tests/
+
+      - name: Build package
+        run: python -m pip install --upgrade build && python -m build
+
+      - name: Check built version matches release tag
+        run: |
+          built=$(ls dist/*.whl | head -1)
+          if [[ "$(basename "$built")" != "agenttune-${{ github.event.release.tag_name }}-"* ]]; then
+            echo "Built artifact $built does not match release tag ${{ github.event.release.tag_name }} - refusing to publish."
+            exit 1
+          fi
+
+      - name: Publish package to PyPI
+        run: |
+          python -m pip install --upgrade twine packaging
+          python -m twine upload dist/*
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}

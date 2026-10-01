@@ -1,0 +1,240 @@
+extends: ../../../../../config.yaml
+
+name: "Multi-Judge Scoring (Parallel)"
+id: "generic/multi_judge_score_parallel"
+version: "1.0.0"
+description: |
+  Evaluate any text, model output, or document using multiple independent LLM judges
+  running in PARALLEL and aggregate their scores into a consensus verdict.
+
+  Pipeline:
+    preprocess → parallel judges (judge_1, judge_2, judge_3 simultaneous) → aggregate → output
+
+  Use cases:
+    - Essay / content quality grading
+    - Code review scoring (readability, correctness, style)
+    - Research paper evaluation
+    - Customer support response quality
+    - Any task requiring multi-perspective assessment
+
+  The parallel judges run simultaneously to prevent anchoring bias AND improve speed.
+  Aggregation uses weighted average: accuracy 40%, clarity 30%, completeness 30%.
+
+tags: ["multi-judge", "scoring", "consensus", "evaluation", "generic", "parallel", "fast"]
+compliance_note: "Multi-judge consensus reduces single-model bias. All judge scores logged for audit."
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Pipeline limits
+# ──────────────────────────────────────────────────────────────────────────────
+max_total_steps: 20
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Episode config
+# ──────────────────────────────────────────────────────────────────────────────
+episode:
+  n_episodes: 50
+  batch_size: 2
+  shuffle_inputs: false
+  seed: 42
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Observation schema
+# ──────────────────────────────────────────────────────────────────────────────
+observation_schema:
+  type: string              # text to be evaluated by the judge panel
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Reward config
+# ──────────────────────────────────────────────────────────────────────────────
+reward:
+  stages:
+    aggregate:
+      fn: verdict_binary    # use the aggregated verdict as RL signal
+      weight: 1.0
+    output_final:
+      fn: verdict_binary    # 1.0 for high-quality output
+      weight: 1.0
+  final_fn: weighted_mean
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Collect config
+# ──────────────────────────────────────────────────────────────────────────────
+collect:
+  algorithm: bco              # binary labels: PASS / FAIL verdict
+  stage_id: aggregate
+  min_samples: 100
+  output_path: ./collected/multi_judge_parallel_bco.jsonl
+  auto_train: false
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Eval config
+# ──────────────────────────────────────────────────────────────────────────────
+eval:
+  test_set: null
+  metrics: [judge_score_mean, accuracy, latency_p50]
+  thresholds:
+    judge_score_mean: 0.65
+    accuracy: 0.80
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Pipeline stages
+# ──────────────────────────────────────────────────────────────────────────────
+stages:
+  # ── Stage 1: Preprocess input ─────────────────────────────────────────────
+  - id: preprocess
+    type: llm_call
+    description: "Extract structured context from input to guide judges"
+    model: "Qwen/Qwen2.5-1.5B-Instruct"
+    prompt: |
+      Before scoring, extract structured context from the text below.
+      This context will be passed to the judges to ensure they score against consistent criteria.
+
+      TEXT TO EVALUATE:
+      {input_text}
+
+      Extract:
+      - content_type: what type of content is this? (essay | code | report | response | other)
+      - domain: what domain or subject area?
+      - apparent_goal: what does the text appear to be trying to achieve?
+      - word_count: approximate word count
+    output_schema:
+      type: object
+      properties:
+        content_type: {type: string}
+        domain: {type: string}
+        apparent_goal: {type: string}
+        word_count: {type: integer}
+      required: [content_type, apparent_goal]
+    next: judge_panel
+
+  # ── Stage 2: Parallel independent judges ─────────────────────────────────
+  - id: judge_panel
+    type: parallel
+    description: "Three independent judges score the text SIMULTANEOUSLY"
+    branches:
+      - id: judge_1
+        type: llm_call
+        description: "Judge 1: focus on accuracy and factual correctness"
+        model: "Qwen/Qwen2.5-1.5B-Instruct"
+        prompt: |
+          You are Judge 1. Your focus is ACCURACY AND FACTUAL CORRECTNESS.
+
+          Content type: {preprocess.output.content_type}
+          Domain: {preprocess.output.domain}
+          Goal: {preprocess.output.apparent_goal}
+
+          TEXT:
+          {input_text}
+
+          Score ONLY for accuracy and factual correctness (0–10).
+          Do not consider style, structure, or other factors.
+          Respond ONLY with JSON: {"score": <int 0-10>, "rationale": "<string>", "key_issues": [<strings>]}
+        output_schema:
+          type: object
+          properties:
+            score: {type: integer, minimum: 0, maximum: 10}
+            rationale: {type: string}
+            key_issues: {type: array, items: {type: string}}
+          required: [score, rationale]
+
+      - id: judge_2
+        type: llm_call
+        description: "Judge 2: focus on clarity and communication"
+        model: "Qwen/Qwen2.5-1.5B-Instruct"
+        prompt: |
+          You are Judge 2. Your focus is CLARITY AND COMMUNICATION QUALITY.
+
+          Content type: {preprocess.output.content_type}
+          Domain: {preprocess.output.domain}
+          Goal: {preprocess.output.apparent_goal}
+
+          TEXT:
+          {input_text}
+
+          Score ONLY for clarity, structure, and communication effectiveness (0–10).
+          Do not consider factual accuracy or other factors.
+          Respond ONLY with JSON: {"score": <int 0-10>, "rationale": "<string>", "key_issues": [<strings>]}
+        output_schema:
+          type: object
+          properties:
+            score: {type: integer, minimum: 0, maximum: 10}
+            rationale: {type: string}
+            key_issues: {type: array, items: {type: string}}
+          required: [score, rationale]
+
+      - id: judge_3
+        type: llm_call
+        description: "Judge 3: focus on completeness and coverage"
+        model: "Qwen/Qwen2.5-1.5B-Instruct"
+        prompt: |
+          You are Judge 3. Your focus is COMPLETENESS AND COVERAGE.
+
+          Content type: {preprocess.output.content_type}
+          Domain: {preprocess.output.domain}
+          Goal: {preprocess.output.apparent_goal}
+
+          TEXT:
+          {input_text}
+
+          Score ONLY for completeness — does the text fully address its stated goal? (0–10)
+          Do not consider accuracy, style, or other factors.
+          Respond ONLY with JSON: {"score": <int 0-10>, "rationale": "<string>", "key_issues": [<strings>]}
+        output_schema:
+          type: object
+          properties:
+            score: {type: integer, minimum: 0, maximum: 10}
+            rationale: {type: string}
+            key_issues: {type: array, items: {type: string}}
+          required: [score, rationale]
+    next: aggregate
+
+  # ── Stage 3: Aggregate scores and produce consensus ───────────────────────
+  - id: aggregate
+    type: llm_call
+    description: "Aggregate individual scores into consensus verdict"
+    model: "Qwen/Qwen2.5-1.5B-Instruct"
+    prompt: |
+      You are the chief evaluator. Aggregate the three independent judge scores into a consensus.
+
+      Content type: {preprocess.output.content_type}
+      Domain: {preprocess.output.domain}
+
+      Judge 1 — Accuracy (score {judge_1.output.score}/10):
+        {judge_1.output.rationale}
+        Issues: {judge_1.output.key_issues}
+
+      Judge 2 — Clarity (score {judge_2.output.score}/10):
+        {judge_2.output.rationale}
+        Issues: {judge_2.output.key_issues}
+
+      Judge 3 — Completeness (score {judge_3.output.score}/10):
+        {judge_3.output.rationale}
+        Issues: {judge_3.output.key_issues}
+
+      Produce:
+      - consensus_score: weighted average (accuracy 40%, clarity 30%, completeness 30%)
+      - verdict: PASS (score >= 7) or FAIL (score < 7)
+      - summary: two-sentence evaluation summary
+      - top_issues: the three most important issues to fix
+
+      Respond ONLY with JSON: {"accuracy_score": <int>, "clarity_score": <int>, "completeness_score": <int>, "consensus_score": <int>, "verdict": "PASS|FAIL", "summary": "<string>", "top_issues": [<strings>]}
+    output_schema:
+      type: object
+      properties:
+        accuracy_score: {type: integer, minimum: 0, maximum: 10}
+        clarity_score: {type: integer, minimum: 0, maximum: 10}
+        completeness_score: {type: integer, minimum: 0, maximum: 10}
+        consensus_score: {type: number}
+        verdict: {type: string, enum: [PASS, FAIL]}
+        summary: {type: string}
+        top_issues: {type: array, items: {type: string}}
+      required: [consensus_score, verdict, summary]
+    next: output_final
+
+  # ── Terminal output ───────────────────────────────────────────────────────
+  - id: output_final
+    type: output
+    description: "Final multi-judge consensus"
+    verdict_field: "aggregate.verdict"
+    confidence_field: "aggregate.consensus_score"
+    destinations: [file]

@@ -1,0 +1,23 @@
+# AgentTune Documentation Dependencies
+# 
+# Install with: pip install -r requirements-docs.txt
+# 
+# These dependencies are only needed for building documentation.
+# They are not required for using AgentTune.
+
+# MkDocs core and theme. Bounds match pyproject.toml's [project.optional-dependencies].docs
+# — mkdocs-material 2.0 / mkdocs 2.0 are backward-incompatible, so cap below them.
+mkdocs>=1.6,<2
+mkdocs-material>=9.5,<10
+
+# Markdown extensions (used by mkdocs-material; also provides the mermaid fence and
+# --8<-- snippet includes used across docs/reference/ and docs/community/)
+pymdown-extensions>=10,<11
+
+# Code highlighting
+pygments>=2.15.0
+
+# Jupyter notebook support (for re-executing the notebooks under docs/notebooks/ locally;
+# not used by the mkdocs build itself)
+jupyter>=1.0.0
+ipykernel>=6.25.0

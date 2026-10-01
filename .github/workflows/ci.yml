@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    # Advisory by design: ruff/black run here for signal, but style nits never block
+    # a merge. Contributors get the same checks locally via `.pre-commit-config.yaml`
+    # (`pip install -e '.[dev]' && pre-commit install`); the `test` job below is the
+    # real gate.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Versions pinned to match .pre-commit-config.yaml.
+      - name: Install linters
+        run: pip install "ruff==0.4.10" "black==24.4.2"
+
+      - name: ruff
+        run: ruff check .
+
+      - name: black
+        run: black --check .
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # `pip install -e '.[dev]'` below pulls in torch, vllm, and the CUDA
+      # wheel stack (~15GB+), which doesn't fit alongside the runner's
+      # preinstalled toolchains (dotnet, Android SDK, GHC, Docker images
+      # aren't needed here). Frees ~25-30GB.
+      # ponytail: fixed disk budget, move to a larger runner if the install grows further.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: Import smoke test
+        run: |
+          python -c "import agenttune; print(agenttune.__version__)"
+          python -c "import agenttune.agentic, agenttune.decide, agenttune.eval, agenttune.rag"
+
+      # The agentic spine and DECIDE are pure-Python and need no model, GPU, or
+      # network. Skip the marked slow / GPU / sandbox / model-download suites.
+      # -v and --timeout: this suite has died mid-run with only "The operation
+      # was canceled" (runner killed ~90s into a silent stretch near the 17%
+      # mark, no traceback). Per-test names plus a hard per-test timeout turn
+      # that into an attributable failure instead of a dead runner.
+      - name: Run fast tests
+        env:
+          PURE_TRL_MODE: "1"
+        run: |
+          free -h; df -h /
+          pytest -v --tb=short -o addopts="" \
+            --timeout=300 \
+            -m "not slow and not gpu and not wandb and not openenv and not qwen_e2e" \
+            -p no:cacheprovider

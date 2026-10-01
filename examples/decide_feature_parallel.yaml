@@ -1,0 +1,141 @@
+# Feature 3: Parallel Execution
+# Demonstrates: Run multiple expert agents concurrently
+
+template_id: "feature/3_parallel"
+version: "1.0.0"
+description: "Parallel execution of expert agents - sentiment, toxicity, topic"
+tags: ["feature", "parallel", "multi_agent"]
+
+max_total_steps: 15
+
+stages:
+  # Stage 1: Parallel expert analysis
+  - id: parallel_experts
+    type: parallel
+    description: "Run 3 specialist agents in parallel for speed"
+    branches:
+      # Branch 1: Sentiment analyst
+      - id: sentiment_agent
+        type: llm_call
+        description: "Analyze sentiment on 0-10 scale"
+        model: "Qwen/Qwen2.5-7B-Instruct"
+        prompt: |
+          Analyze sentiment of this text: {input_text}
+
+          Return JSON:
+          {
+            "score": 0-10,
+            "label": "positive" | "negative" | "neutral",
+            "explanation": "brief reason"
+          }
+        output_schema:
+          type: object
+          properties:
+            score:
+              type: integer
+              minimum: 0
+              maximum: 10
+            label:
+              type: string
+              enum: ["positive", "negative", "neutral"]
+            explanation:
+              type: string
+          required: [score, label]
+
+      # Branch 2: Toxicity checker
+      - id: toxicity_agent
+        type: llm_call
+        description: "Check for harmful content"
+        model: "Qwen/Qwen2.5-7B-Instruct"
+        prompt: |
+          Check toxicity: {input_text}
+
+          Return JSON:
+          {
+            "is_toxic": true | false,
+            "confidence": 0.0-1.0,
+            "flags": ["list of harmful patterns if any"]
+          }
+        output_schema:
+          type: object
+          properties:
+            is_toxic:
+              type: boolean
+            confidence:
+              type: number
+              minimum: 0.0
+              maximum: 1.0
+            flags:
+              type: array
+              items:
+                type: string
+          required: [is_toxic, confidence]
+
+      # Branch 3: Topic classifier
+      - id: topic_agent
+        type: llm_call
+        description: "Classify content topic"
+        model: "Qwen/Qwen2.5-7B-Instruct"
+        prompt: |
+          Classify topic: {input_text}
+
+          Return JSON:
+          {
+            "topic": "sports" | "politics" | "tech" | "business" | "other",
+            "confidence": 0.0-1.0
+          }
+        output_schema:
+          type: object
+          properties:
+            topic:
+              type: string
+              enum: ["sports", "politics", "tech", "business", "other"]
+            confidence:
+              type: number
+              minimum: 0.0
+              maximum: 1.0
+          required: [topic, confidence]
+
+    next: judge_results
+
+  # Stage 2: Judge combines parallel outputs
+  - id: judge_results
+    type: llm_judge
+    description: "Aggregate agent results into final decision"
+    model: "Qwen/Qwen2.5-7B-Instruct"
+    prompt: |
+      Sentiment score: {sentiment_agent.output.score}/10 ({sentiment_agent.output.label})
+      Toxic: {toxicity_agent.output.is_toxic} (confidence: {toxicity_agent.output.confidence})
+      Topic: {topic_agent.output.topic}
+
+      Should we APPROVE or REJECT this content?
+      Consider: toxicity level, sentiment, and topic appropriateness.
+
+      Return JSON:
+      {
+        "decision": "APPROVE" | "REJECT",
+        "reason": "explanation",
+        "confidence": 0-10
+      }
+    output_schema:
+      type: object
+      properties:
+        decision:
+          type: string
+          enum: ["APPROVE", "REJECT"]
+        reason:
+          type: string
+        confidence:
+          type: integer
+          minimum: 0
+          maximum: 10
+      required: [decision, reason, confidence]
+
+    next: output_stage
+
+  # Stage 3: Output
+  - id: output_stage
+    type: output
+    verdict: "{judge_results.output.decision}"
+    verdict_label: "moderation"
+    destinations: [file]

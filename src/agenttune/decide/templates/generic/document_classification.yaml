@@ -1,0 +1,157 @@
+extends: ../../../../../config.yaml
+
+name: "Document Classification"
+id: "generic/document_classification"
+version: "1.0.0"
+description: |
+  Multi-class text document classification pipeline. Extracts document features,
+  applies rules-based heuristics for confident classifications, and uses LLM judge
+  for uncertain cases. Suitable for email categorization, issue triage, content labeling, etc.
+tags: ["classification", "nlp", "text", "generic"]
+compliance_note: "Audit trail recorded for all classification decisions."
+
+max_total_steps: 15
+
+stages:
+  - id: extract_features
+    type: llm_call
+    description: "Extract key features from document for classification"
+    prompt: |
+      Analyze the document and extract:
+      - Main topic or subject
+      - Key entities mentioned (names, organizations, locations)
+      - Sentiment (positive, negative, neutral)
+      - Document type indicators (formal, informal, technical, legal, etc.)
+      - Language/keywords characteristic of different categories
+
+      Return structured feature extraction as JSON.
+    output_schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          description: "Main topic or subject"
+        entities:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: ["person", "organization", "location", "product", "other"]
+              name:
+                type: string
+        sentiment:
+          type: string
+          enum: ["positive", "neutral", "negative"]
+        document_style:
+          type: string
+          enum: ["formal", "informal", "technical", "legal", "marketing", "editorial"]
+        key_keywords:
+          type: array
+          items:
+            type: string
+      required: [topic, sentiment, document_style]
+    model: "Qwen/Qwen2.5-1.5B-Instruct"
+    next: rule_based_classification
+
+  - id: rule_based_classification
+    type: rules
+    description: "Apply simple rules to classify document with high confidence"
+    rules:
+      - condition: "document_style == 'legal' and any(keyword in ['contract', 'agreement', 'clause'] for keyword in key_keywords)"
+        on_fail:
+          goto: llm_judge
+          inject: "Could not confirm legal document category using rules. Proceed to LLM classification."
+      - condition: "document_style == 'technical' and sentiment != 'negative'"
+        on_fail:
+          goto: llm_judge
+          inject: "Insufficient signal for technical classification via rules. Use LLM for final categorization."
+      - condition: "sentiment == 'positive' or sentiment == 'neutral' or sentiment == 'negative'"
+        on_fail:
+          goto: llm_judge
+          inject: "Sentiment extraction failed. Proceed to LLM-based classification."
+    next: confidence_check
+
+  - id: confidence_check
+    type: router
+    description: "Check if rule-based classification has high enough confidence to output directly"
+    prompt: |
+      Based on extracted features:
+      - Topic: {extract_features.output.topic}
+      - Style: {extract_features.output.document_style}
+      - Keywords: {extract_features.output.key_keywords}
+      - Sentiment: {extract_features.output.sentiment}
+
+      Is there clear, high-confidence category assignment possible?
+      If clear category exists (like obvious legal document), output TRUE and category.
+      If ambiguous, output FALSE for LLM judgment.
+    output_schema:
+      type: object
+      properties:
+        is_confident:
+          type: boolean
+          description: "Whether rule/features indicate confident classification"
+        apparent_category:
+          type: string
+          description: "Category if confident, null if unclear"
+    model: "Qwen/Qwen2.5-1.5B-Instruct"
+    next: output_result
+    on_result:
+      - condition: "not is_confident"
+        goto: llm_judge
+
+  - id: llm_judge
+    type: llm_judge
+    description: "Use LLM to classify document into appropriate category"
+    prompt: |
+      Classify this document into one of the following categories:
+
+      1. LEGAL - Contracts, agreements, ToS, privacy policies, legal notices
+      2. TECHNICAL - Software documentation, API specs, technical guides, system descriptions
+      3. MARKETING - Promotional content, advertising, sales materials, product descriptions
+      4. EDITORIAL - News articles, opinion pieces, blog posts, commentary
+      5. SUPPORT - Help documents, FAQs, troubleshooting guides, customer support content
+      6. OPERATIONAL - Internal procedures, guidelines, standards, policies
+      7. FINANCIAL - Reports, statements, invoices, financial documents
+      8. OTHER - Documents that don't fit above categories
+
+      Evidence from analysis:
+      - Extracted Topic: {extract_features.output.topic}
+      - Document Style: {extract_features.output.document_style}
+      - Entities: {extract_features.output.entities}
+      - Key Keywords: {extract_features.output.key_keywords}
+      - Sentiment: {extract_features.output.sentiment}
+
+      Provide your classification with confidence score and reasoning.
+    output_schema:
+      type: object
+      properties:
+        category:
+          type: string
+          enum: ["LEGAL", "TECHNICAL", "MARKETING", "EDITORIAL", "SUPPORT", "OPERATIONAL", "FINANCIAL", "OTHER"]
+          description: "Primary document category"
+        confidence_score:
+          type: integer
+          minimum: 1
+          maximum: 10
+          description: "Confidence in the classification (1-10)"
+        reasoning:
+          type: string
+          description: "Explanation for the classification"
+        secondary_categories:
+          type: array
+          items:
+            type: string
+          description: "Other possible categories if document is multi-purpose"
+    model: "Qwen/Qwen2.5-1.5B-Instruct"
+    max_iterations: 1
+    next: output_result
+    on_fail: output_result
+
+  - id: output_result
+    type: output
+    description: "Output classification result"
+    destinations: [file, postgres]
+    verdict_field: "llm_judge.output.category"
+    confidence_field: "llm_judge.output.confidence_score"

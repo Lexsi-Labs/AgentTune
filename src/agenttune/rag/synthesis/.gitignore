@@ -1,0 +1,6 @@
+
+# Regenerable binary artifacts (the dataset CSVs/Parquet/JSONL are committed;
+# these are rebuildable indexes/caches)
+synth_outputs/*/corpus.sqlite
+synth_outputs/*/stage0_cache.pkl
+synth_outputs/*/corpus.chroma/

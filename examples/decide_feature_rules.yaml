@@ -1,0 +1,80 @@
+# Feature 2: Rules & Conditional Logic
+# Demonstrates: Deterministic rule evaluation (no LLM cost)
+
+template_id: "feature/2_rules"
+version: "1.0.0"
+description: "Rules-based conditional logic for deterministic decisions"
+tags: ["feature", "rules", "conditional"]
+
+max_total_steps: 10
+
+stages:
+  # Stage 1: Extract structured data
+  - id: extract_info
+    type: llm_call
+    description: "Extract age and income from input"
+    model: "Qwen/Qwen2.5-7B-Instruct"
+    prompt: |
+      Extract from the following text:
+      - age (number)
+      - annual_income (number)
+
+      Text: {input_text}
+
+      Return JSON:
+      {
+        "age": 25,
+        "annual_income": 50000
+      }
+    output_schema:
+      type: object
+      properties:
+        age:
+          type: number
+        annual_income:
+          type: number
+      required: [age, annual_income]
+
+    next: check_eligibility
+
+  # Stage 2: Apply deterministic rules (no LLM)
+  - id: check_eligibility
+    type: rules
+    description: "Check eligibility: age >= 18 AND income >= 20000"
+    rules:
+      # Rule 1: Age check
+      - condition: "age >= 18"
+        on_fail:
+          goto: age_insufficient
+          inject: "Age is {age}, must be 18+"
+
+      # Rule 2: Income check
+      - condition: "annual_income >= 20000"
+        on_fail:
+          goto: income_insufficient
+          inject: "Annual income is {annual_income}, minimum is 20000"
+
+    # If all rules pass, go to next stage
+    next: eligible_output
+
+  # Terminal stages
+  - id: eligible_output
+    type: output
+    description: "Applicant is eligible"
+    verdict: "ELIGIBLE"
+    verdict_label: "eligibility_approved"
+    destinations: [file]
+
+  - id: age_insufficient
+    type: output
+    description: "Applicant too young"
+    verdict: "INELIGIBLE_AGE"
+    verdict_label: "age_check_failed"
+    destinations: [file]
+
+  - id: income_insufficient
+    type: output
+    description: "Applicant income too low"
+    verdict: "INELIGIBLE_INCOME"
+    verdict_label: "income_check_failed"
+    destinations: [file]

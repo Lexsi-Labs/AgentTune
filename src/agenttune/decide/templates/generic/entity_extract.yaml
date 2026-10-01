@@ -1,0 +1,34 @@
+extends: ../../../../../config.yaml
+
+name: "ENTITY EXTRACT"
+id: "generic/entity_extract"
+version: "1.0.0"
+description: |
+  Generic decision pipeline for entity_extract.
+tags: ["generic"]
+compliance_note: "Domain-agnostic template."
+
+max_total_steps: 30
+
+stages:
+  - id: process
+    type: llm_call
+    description: "Extract entities from text"
+    prompt: |
+      Extract all named entities (persons, organizations, locations) from the given text.
+      Respond ONLY with valid JSON (no markdown, no code blocks): {"entities": [{"type": "PERSON"|"ORG"|"LOC", "value": "..."}], "verdict": "PASS" | "FAIL"}
+
+      Text: {input_text}
+    output_schema:
+      type: object
+      properties:
+        entities: {type: array, items: {type: object, properties: {type: {type: string}, value: {type: string}}, required: ["type", "value"]}}
+        verdict: {type: string, enum: ["PASS", "FAIL"]}
+      required: [entities, verdict]
+    next: output_stage
+
+  - id: output_stage
+    type: output
+    description: "Final output with extracted entities"
+    verdict_field: "process.output.verdict"
+    destinations: [file]

@@ -1,0 +1,223 @@
+# AgentTune Decide — Global Configuration
+#
+# This is the "environment config" for your LLM decision pipelines —
+# analogous to OpenAI Gym's env config, but fully YAML-driven and
+# overcoming Gym's core limitations:
+#
+#   Gym problem                  AgentTune Decide solution
+#   ─────────────────────────    ────────────────────────────────────────────
+#   Python-only environments     YAML-driven pipeline (no code required)
+#   Python-only reward fns       reward.fn: verdict_binary | judge_score | …
+#   No LLM in step()             llm_call / llm_judge stage types
+#   No multi-step reasoning      tools: [web_search, sql_query] per stage
+#   Fixed obs/action space       output_schema per stage + observation_schema
+#   No episode batching          episode.n_episodes / episode.batch_size
+#   No training data collection  collect.algorithm: dpo | bco | grpo
+#   Hard-coded done conditions   on_result conditions per stage
+#   No human-in-the-loop         human_review stage type
+#   No observability             audit.jsonl per execution
+#
+# Config for the DECIDE example scripts under examples/ — they load ./config/config.yaml.
+# Ships ready to run against open-source models (no API keys needed). The repo-root
+# ./config.yaml is the default for `agenttune pipeline` and the bundled templates.
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 1. API Keys (DEPRECATED: For open-source models only, these are not used)
+# ──────────────────────────────────────────────────────────────────────────────
+# NOTE: This project uses OPEN-SOURCE MODELS ONLY (Qwen, LLaMA, etc.)
+# API-based providers (OpenAI, Anthropic, Groq) are NOT supported
+# These placeholders are retained for backward compatibility only
+api_keys:
+  anthropic: "PLACEHOLDER_NOT_USED"
+  openai: "PLACEHOLDER_NOT_USED"
+  groq: "PLACEHOLDER_NOT_USED"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2. Default Models
+# ──────────────────────────────────────────────────────────────────────────────
+default_model: "Qwen/Qwen2.5-1.5B-Instruct"
+judge_model: "Qwen/Qwen2.5-1.5B-Instruct"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 3. Global Pipeline Limits
+# ──────────────────────────────────────────────────────────────────────────────
+max_total_steps: 50           # global guard: stop after N steps across all stages
+timeout_seconds: 3600         # per-execution wall-clock timeout
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 4. Execution Mode  (Gym analogy: which loop to run)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+#   inference  — single-shot pipeline run; returns verdict + audit entry (default)
+#   collect    — run N episodes, write training data to collect.output_path
+#   eval       — run against a test set, compute metrics, check thresholds
+#   train      — collect + auto-train via trainer_config.yaml when min_samples hit
+#
+run_mode: inference   # inference | collect | eval | train
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 5. Episode Config  (Gym analogy: episode / rollout loop)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# Used by collect / eval / train modes.
+# In inference mode, n_episodes is always 1 and other fields are ignored.
+#
+episode:
+  n_episodes: 1             # number of episodes (pipeline runs) per execution
+  batch_size: 1             # parallel episodes (set > 1 for faster collection)
+  shuffle_inputs: false     # randomise input order across episodes
+  seed: 42                  # reproducibility seed for shuffling / sampling
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 6. Observation Schema  (Gym analogy: observation_space)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# Defines and validates what the pipeline accepts as input.
+# Individual stages define their own output_schema (action_space analogy).
+#
+observation_schema:
+  type: string              # string | json | file
+  # For json type, add JSON schema:
+  # properties:
+  #   document: {type: string}
+  #   customer_id: {type: string}
+  # required: [document]
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 7. Reward Config  (Gym analogy: reward signal)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# Defines how reward is computed per stage and per episode.
+# Reward is written to audit.jsonl and consumed by the training bridge.
+#
+# Builtin reward functions:
+#   verdict_binary   — 1.0 for approved/complete verdicts, 0.0 for denied/failed
+#   judge_score      — normalized llm_judge score (0–10 → 0.0–1.0)
+#   rule_pass_rate   — fraction of rules that passed (0.0–1.0)
+#   iteration_penalty— 1.0 - (iterations / max_iterations); rewards fewer loops
+#   custom           — load from module.function path
+#
+reward:
+  # Default reward function applied to output stages unless overridden per-stage
+  # Use verdict_binary (no API calls) instead of judge_score
+  default_fn: verdict_binary    # verdict_binary | judge_score | rule_pass_rate | iteration_penalty | custom
+
+  # Normalize all rewards to [0, 1] before writing to audit
+  normalize: true
+  scale: [0.0, 1.0]            # output range after normalization
+
+  # Use an LLM judge as an additional reward signal (adds judge_reward field to audit)
+  judge_as_reward:
+    enabled: false
+    model: "Qwen/Qwen2.5-1.5B-Instruct"
+    backend: "transformers"
+    weight: 1.0
+    system_prompt: |
+      You are a strict quality evaluator.
+      Score the pipeline output from 0.0 to 1.0 based on accuracy and completeness.
+      Respond ONLY with JSON: {"score": <float 0-1>, "explanation": "<one sentence>"}
+
+  # Custom reward function (module.function path, called with (state, stage_config))
+  # custom_fn: my_package.rewards.my_reward_fn
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 8. Collect Config  (training data collection mode)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# Controls how training data is extracted and stored in collect/train modes.
+# The collected data is compatible with AgentTune's training bridge.
+#
+# Algorithm mapping:
+#   dpo   — preference pairs from human_review rejections
+#   bco   — binary labels from APPROVE/DENY verdicts
+#   grpo  — group rewards from judge scores across N runs
+#   ppo   — per-token rewards from full execution traces
+#   rloo  — leave-one-out baseline from batch runs
+#
+collect:
+  algorithm: dpo              # dpo | bco | grpo | ppo | rloo
+
+  # Which stage's I/O becomes training data.
+  # null = use the final output stage (verdict-level data)
+  # Specify a stage_id for finer-grained stage-level training data.
+  stage_id: null
+
+  # Minimum samples to collect before declaring the dataset ready
+  min_samples: 50
+
+  # Where to write collected training data (separate from audit.jsonl)
+  output_path: ./collected_data.jsonl
+
+  # Trigger trainer_config.yaml automatically when min_samples reached
+  auto_train: false
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 9. Eval Config  (systematic evaluation mode)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# Run the pipeline against a labelled test set and compute metrics.
+# test_set must be a JSONL file: each line = {"input": "...", "expected_verdict": "APPROVE"}
+#
+eval:
+  test_set: null                        # path to test set JSONL; null = skip eval mode
+  metrics:
+    - accuracy                          # % correct verdicts (requires expected_verdict in test_set)
+    - latency_p50                       # median stage latency ms
+    - latency_p95                       # 95th-percentile latency ms
+    - cost_per_decision                 # average API cost USD per episode
+    - judge_score_mean                  # mean judge score across executions
+  thresholds:
+    accuracy: 0.80                      # fail if accuracy drops below this
+    latency_p95: 5000                   # fail if 95th-percentile latency > 5s
+    cost_per_decision: 0.10             # fail if cost > $0.10 per decision
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 10. Training Integration  (train mode — links to trainer_config.yaml)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# Only active when run_mode: train.
+# Collect runs until min_samples reached, then hands off to TrainerConfigBridge.
+#
+training:
+  trainer_config: null          # path to trainer_config.yaml; null = use defaults
+  auto_deploy: false            # if true, update default_model after training completes
+  deploy_stage_id: null         # deploy trained model to a specific stage only (A/B style)
+                                # null = deploy globally as default_model
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 11. Audit Logging
+# ──────────────────────────────────────────────────────────────────────────────
+audit:
+  destination: file
+  path: ./audit.jsonl
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 12. Output Destinations
+# ──────────────────────────────────────────────────────────────────────────────
+destinations:
+  file:
+    enabled: true
+    path: ./decisions.jsonl
+    format: jsonl             # jsonl | json
+
+  postgres:
+    enabled: false
+    connection_string: "postgresql://user:password@localhost/agenttune"
+    table: decisions
+
+  webhook:
+    enabled: false
+    url: "https://api.example.com/webhook/decisions"
+    method: POST
+    headers:
+      Authorization: "Bearer your-token-here"
+      Content-Type: "application/json"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 13. Compliance
+# ──────────────────────────────────────────────────────────────────────────────
+compliance:
+  audit_required: true
+  human_review_required: false  # override per template for high-stakes decisions
+  log_prompts: true
+  log_responses: true

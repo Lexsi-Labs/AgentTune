@@ -1,0 +1,262 @@
+extends: ../../../../../config.yaml
+
+name: "Fraud Detection"
+id: "bfsi/fraud_detection"
+version: "1.0.0"
+description: |
+  Real-time fraud detection for transactions using a parallel expert panel approach.
+  Runs three independent agents (fraud detection, customer satisfaction analysis, compliance check)
+  in parallel, aggregates their outputs, and routes to human review if needed.
+tags: ["fraud", "detection", "transaction", "bfsi"]
+compliance_note: "Supports transaction monitoring as required by AML/CFT regulations. Final decision requires human authorization."
+
+max_total_steps: 25
+
+stages:
+  - id: extract
+    type: llm_call
+    description: "Extract transaction and customer details from input"
+    prompt: |
+      Extract and structure the following information about the transaction:
+      - Transaction ID
+      - Amount (USD)
+      - Merchant name and category
+      - Customer name and account age
+      - Transaction type (purchase, withdrawal, transfer, etc.)
+      - Geographic location of transaction
+      - Timestamp
+
+      Return as JSON with these fields.
+    output_schema:
+      type: object
+      properties:
+        transaction_id:
+          type: string
+        amount:
+          type: number
+        merchant_name:
+          type: string
+        merchant_category:
+          type: string
+        customer_name:
+          type: string
+        account_age_days:
+          type: integer
+        transaction_type:
+          type: string
+          enum: ["purchase", "withdrawal", "transfer", "deposit", "other"]
+        location:
+          type: string
+        timestamp:
+          type: string
+          format: "date-time"
+      required: [transaction_id, amount, merchant_name, customer_name, transaction_type, timestamp]
+    model: Qwen/Qwen2.5-1.5B-Instruct
+    next: parallel_analysis
+
+  - id: parallel_analysis
+    type: parallel
+    description: "Run three fraud detection agents in parallel"
+    branches:
+      - id: fraud_agent
+        type: llm_call
+        description: "Analyze transaction for fraud patterns and risk indicators"
+        prompt: |
+          Analyze this transaction for fraud risk:
+          - Amount: {extract.output.amount}
+          - Merchant: {extract.output.merchant_name} ({extract.output.merchant_category})
+          - Customer Account Age: {extract.output.account_age_days} days
+          - Transaction Type: {extract.output.transaction_type}
+          - Location: {extract.output.location}
+
+          Identify fraud risk patterns (unusual amounts, high-risk merchants, velocity anomalies, etc).
+          Provide a fraud risk score from 0-10 (0=no risk, 10=high fraud risk) and key risk indicators.
+        output_schema:
+          type: object
+          properties:
+            fraud_score:
+              type: integer
+              minimum: 0
+              maximum: 10
+              description: "Fraud risk score"
+            risk_indicators:
+              type: array
+              items:
+                type: string
+              description: "Identified fraud risk factors"
+            recommendation:
+              type: string
+              enum: ["approve", "challenge", "block"]
+              description: "Initial recommendation"
+
+      - id: csat_agent
+        type: llm_call
+        description: "Analyze customer satisfaction and behavior profile"
+        prompt: |
+          Analyze customer profile and transaction patterns:
+          - Customer: {extract.output.customer_name}
+          - Account Age: {extract.output.account_age_days} days
+          - Transaction Amount: {extract.output.amount}
+          - Merchant Category: {extract.output.merchant_category}
+
+          Consider: Is this transaction consistent with customer profile? High account age and good history reduce risk.
+          Provide a legitimacy score from 0-10 (0=highly suspicious, 10=fully legitimate) and confidence level.
+        output_schema:
+          type: object
+          properties:
+            legitimacy_score:
+              type: integer
+              minimum: 0
+              maximum: 10
+              description: "Score indicating transaction legitimacy"
+            customer_profile_notes:
+              type: string
+              description: "Notes on customer's transaction history and behavior"
+            confidence:
+              type: string
+              enum: ["low", "medium", "high"]
+              description: "Confidence in the assessment"
+
+      - id: compliance_agent
+        type: llm_call
+        description: "Check transaction against compliance and AML rules"
+        prompt: |
+          Perform compliance screening for transaction:
+          - Merchant: {extract.output.merchant_name} ({extract.output.merchant_category})
+          - Amount: {extract.output.amount}
+          - Location: {extract.output.location}
+          - Type: {extract.output.transaction_type}
+
+          Check: High-risk jurisdictions, sanctions-listed merchants, unusual amounts for merchant category,
+          transaction velocity, AML watch list matches.
+          Provide compliance risk score and specific violations or concerns.
+        output_schema:
+          type: object
+          properties:
+            compliance_score:
+              type: integer
+              minimum: 0
+              maximum: 10
+              description: "Compliance risk score (0=compliant, 10=high risk)"
+            violations:
+              type: array
+              items:
+                type: string
+              description: "Regulatory or policy violations identified"
+            aml_flags:
+              type: array
+              items:
+                type: string
+              description: "AML watch list matches or concerns"
+
+    next: aggregate_analysis
+
+  - id: aggregate_analysis
+    type: llm_call
+    description: "Aggregate three expert analyses and make preliminary decision"
+    prompt: |
+      Transaction Analysis Summary:
+      ID: {extract.output.transaction_id}
+      Amount: ${amount} at {extract.output.merchant_name}
+      Customer: {extract.output.customer_name} (account age: {extract.output.account_age_days} days)
+
+      FRAUD ANALYSIS:
+      - Fraud Risk Score: {fraud_agent.output.fraud_score}/10
+      - Risk Indicators: {fraud_agent.output.risk_indicators}
+      - Recommendation: {fraud_agent.output.recommendation}
+
+      CSAT ANALYSIS:
+      - Legitimacy Score: {csat_agent.output.legitimacy_score}/10
+      - Profile Notes: {csat_agent.output.customer_profile_notes}
+      - Confidence: {csat_agent.output.confidence}
+
+      COMPLIANCE ANALYSIS:
+      - Compliance Score: {compliance_agent.output.compliance_score}/10
+      - Violations: {compliance_agent.output.violations}
+      - AML Flags: {compliance_agent.output.aml_flags}
+
+      Synthesize all three analyses and respond ONLY with valid JSON. Provide:
+      {{
+        "overall_score": <0-10>,
+        "recommendation": "APPROVE" | "CHALLENGE" | "BLOCK",
+        "key_factors": [<list of strings>],
+        "confidence": "low" | "medium" | "high",
+        "reasoning": "<one sentence>"
+      }}
+    output_schema:
+      type: object
+      properties:
+        overall_score:
+          type: integer
+          minimum: 0
+          maximum: 10
+          description: "Weighted fraud risk score"
+        recommendation:
+          type: string
+          enum: ["APPROVE", "CHALLENGE", "BLOCK"]
+          description: "Decision recommendation"
+        key_factors:
+          type: array
+          items:
+            type: string
+          description: "Top factors influencing the decision"
+        confidence:
+          type: string
+          enum: ["low", "medium", "high"]
+          description: "Confidence in the decision"
+        reasoning:
+          type: string
+          description: "Detailed reasoning for the recommendation"
+    model: Qwen/Qwen2.5-1.5B-Instruct
+    max_iterations: 1
+    on_result:
+      - condition: "aggregate_analysis.output.recommendation == 'APPROVE'"
+        goto: approve
+      - condition: "aggregate_analysis.output.recommendation == 'BLOCK'"
+        goto: block
+      - condition: "aggregate_analysis.output.recommendation == 'CHALLENGE'"
+        goto: human_review
+      - condition: "aggregate_analysis.output.confidence == 'low'"
+        goto: human_review
+    on_fail: human_review
+
+  - id: human_review
+    type: human_review
+    description: "Escalate to human analyst for manual review"
+    prompt_for_human: |
+      TRANSACTION FRAUD ALERT FOR REVIEW
+
+      Transaction: {extract.output.transaction_id}
+      Amount: {extract.output.amount} USD
+      Merchant: {extract.output.merchant_name} ({extract.output.merchant_category})
+      Customer: {extract.output.customer_name}
+      Account Age: {extract.output.account_age_days} days
+
+      AGENT ANALYSIS:
+      Fraud Score: {fraud_agent.output.fraud_score}/10 - {fraud_agent.output.risk_indicators}
+      Legitimacy Score: {csat_agent.output.legitimacy_score}/10
+      Compliance Risk: {compliance_agent.output.compliance_score}/10 - {compliance_agent.output.violations}
+
+      AGGREGATE RECOMMENDATION: {aggregate_analysis.output.recommendation}
+      Reasoning: {aggregate_analysis.output.reasoning}
+
+      Please review and provide decision: APPROVE or BLOCK
+    timeout_seconds: 1800
+    on_approved: approve
+    on_denied: block
+
+  - id: approve
+    type: output
+    description: "Transaction approved"
+    destinations: [file, postgres]
+    verdict: APPROVE
+    verdict_label: "transaction_approved"
+    confidence_field: "aggregate_analysis.output.overall_score"
+
+  - id: block
+    type: output
+    description: "Transaction blocked due to fraud risk"
+    destinations: [file, postgres]
+    verdict: BLOCK
+    verdict_label: "transaction_blocked"
+    confidence_field: "aggregate_analysis.output.overall_score"

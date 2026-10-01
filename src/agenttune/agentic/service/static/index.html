@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AgentTune · the agentic spine</title>
+<style>
+  :root {
+    --ground:#0e1016; --panel:#171a23; --panel-2:#1e2230; --line:#282d3d;
+    --ink:#e7e9f0; --muted:#8b90a3; --faint:#5b6072;
+    --accent:#4fd1c5; --accent-dim:#2b6b65;
+    --good:#56d364; --warn:#e3b341; --crit:#f85149;
+    --radius:10px; --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --ground:#f7f8fb; --panel:#ffffff; --panel-2:#eef1f6; --line:#dfe3ec;
+      --ink:#1a1d26; --muted:#5c6377; --faint:#9aa0b2;
+      --accent:#0f9b8e; --accent-dim:#7fd4cb;
+      --good:#1a7f37; --warn:#9a6700; --crit:#cf222e;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:#0e1016; --panel:#171a23; --panel-2:#1e2230; --line:#282d3d;
+    --ink:#e7e9f0; --muted:#8b90a3; --faint:#5b6072;
+    --accent:#4fd1c5; --accent-dim:#2b6b65;
+    --good:#56d364; --warn:#e3b341; --crit:#f85149;
+  }
+  :root[data-theme="light"] {
+    --ground:#f7f8fb; --panel:#ffffff; --panel-2:#eef1f6; --line:#dfe3ec;
+    --ink:#1a1d26; --muted:#5c6377; --faint:#9aa0b2;
+    --accent:#0f9b8e; --accent-dim:#7fd4cb;
+    --good:#1a7f37; --warn:#9a6700; --crit:#cf222e;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; }
+  body {
+    background:var(--ground); color:var(--ink); font-family:var(--sans);
+    font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased;
+  }
+  .app { display:grid; grid-template-columns:320px 1fr; height:100vh; }
+  @media (max-width:860px){ .app{ grid-template-columns:1fr; height:auto; } }
+
+  /* ---- control rail ---- */
+  .rail { background:var(--panel); border-right:1px solid var(--line);
+    padding:20px; display:flex; flex-direction:column; gap:18px; overflow-y:auto; }
+  .brand { display:flex; flex-direction:column; gap:4px; }
+  .brand h1 { font:600 17px/1.2 var(--mono); letter-spacing:-.01em; margin:0; }
+  .brand .dot { color:var(--accent); }
+  .brand p { margin:0; color:var(--muted); font-size:12px; text-wrap:balance; }
+  .label { font:600 10px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase;
+    color:var(--faint); }
+  textarea { width:100%; min-height:96px; resize:vertical; background:var(--panel-2);
+    color:var(--ink); border:1px solid var(--line); border-radius:var(--radius);
+    padding:10px 12px; font:13px/1.5 var(--mono); }
+  textarea:focus,button:focus-visible,select:focus { outline:2px solid var(--accent); outline-offset:1px; }
+  select { flex:1; background:var(--panel-2); color:var(--ink); border:1px solid var(--line);
+    border-radius:var(--radius); padding:9px 10px; font:13px var(--sans); }
+  .actions { display:flex; flex-direction:column; gap:8px; }
+  button { font:600 13px var(--sans); color:var(--ink); background:var(--panel-2);
+    border:1px solid var(--line); border-radius:var(--radius); padding:10px 12px;
+    text-align:left; cursor:pointer; display:flex; align-items:center; gap:10px;
+    transition:border-color .12s, background .12s; }
+  button:hover:not(:disabled){ border-color:var(--accent-dim); }
+  button:disabled{ opacity:.45; cursor:not-allowed; }
+  button .idx { font:600 11px var(--mono); color:var(--accent); width:16px; }
+  button.primary { background:var(--accent); color:#04120f; border-color:var(--accent); }
+  button.primary .idx { color:#04120f; }
+  .foot { margin-top:auto; color:var(--faint); font-size:11px; font-family:var(--mono); }
+
+  /* ---- main ---- */
+  .main { display:flex; flex-direction:column; min-width:0; height:100vh; overflow:hidden; }
+  @media (max-width:860px){ .main{ height:auto; overflow:visible; } }
+  .strip { display:flex; gap:8px; padding:16px 20px; border-bottom:1px solid var(--line);
+    overflow-x:auto; align-items:center; }
+  .stage { display:flex; align-items:center; gap:8px; padding:7px 12px; border-radius:99px;
+    border:1px solid var(--line); background:var(--panel); white-space:nowrap;
+    font:600 12px var(--mono); color:var(--muted); }
+  .stage .bul { width:7px; height:7px; border-radius:99px; background:var(--faint); }
+  .stage.done { color:var(--ink); border-color:var(--accent-dim); }
+  .stage.done .bul { background:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent); }
+  .arrow { color:var(--faint); font-family:var(--mono); }
+
+  .grid { display:grid; grid-template-columns:1.15fr .85fr; gap:1px; background:var(--line);
+    flex:1; min-height:0; }
+  @media (max-width:860px){ .grid{ grid-template-columns:1fr; } }
+  .pane { background:var(--ground); display:flex; flex-direction:column; min-height:0; }
+  .pane > h2 { margin:0; padding:12px 20px; font:600 11px/1 var(--mono); letter-spacing:.12em;
+    text-transform:uppercase; color:var(--faint); border-bottom:1px solid var(--line);
+    display:flex; justify-content:space-between; align-items:center; }
+  .pane .body { padding:14px 20px; overflow-y:auto; flex:1; }
+  .right { display:grid; grid-template-rows:repeat(3,1fr); }
+  .right .pane { border-bottom:1px solid var(--line); }
+
+  /* ---- event trace (hero) ---- */
+  .trace { display:flex; flex-direction:column; gap:0; font-family:var(--mono); font-size:12.5px; }
+  .ev { display:grid; grid-template-columns:64px 120px 1fr; gap:12px; padding:6px 0;
+    border-bottom:1px dashed var(--line); animation:slidein .18s ease; }
+  @keyframes slidein { from{ opacity:0; transform:translateY(3px);} to{opacity:1;} }
+  @media (prefers-reduced-motion:reduce){ .ev{ animation:none; } }
+  .ev .t { color:var(--faint); font-variant-numeric:tabular-nums; }
+  .ev .st { color:var(--accent); font-weight:600; }
+  .ev .kd { color:var(--ink); }
+  .ev .kd b { color:var(--muted); font-weight:400; }
+  .empty { color:var(--faint); font-family:var(--mono); font-size:12.5px; padding:8px 0; }
+
+  /* result bits */
+  .traj { font-family:var(--mono); font-size:12px; display:flex; justify-content:space-between;
+    padding:6px 0; border-bottom:1px dashed var(--line); }
+  .tier { color:var(--accent); }
+  .metric { display:grid; grid-template-columns:52px 1fr 44px; align-items:center; gap:10px;
+    padding:5px 0; font-family:var(--mono); font-size:12px; }
+  .metric .bar { height:6px; background:var(--panel-2); border-radius:99px; overflow:hidden; }
+  .metric .bar i { display:block; height:100%; background:var(--accent); border-radius:99px; }
+  .metric .v { text-align:right; font-variant-numeric:tabular-nums; color:var(--muted); }
+  .row-k { color:var(--faint); }
+  pre { margin:0; background:var(--panel); border:1px solid var(--line); border-radius:8px;
+    padding:10px; overflow-x:auto; font:11.5px/1.5 var(--mono); color:var(--ink); }
+  .badge { font:600 10px var(--mono); letter-spacing:.06em; text-transform:uppercase;
+    padding:3px 8px; border-radius:99px; border:1px solid var(--warn);
+    color:var(--warn); background:color-mix(in srgb,var(--warn) 12%,transparent); }
+  .fail { font-family:var(--mono); font-size:12px; padding:6px 0; border-bottom:1px dashed var(--line);
+    display:flex; gap:10px; }
+  .fail .ty { color:var(--crit); font-weight:600; }
+  .ok { color:var(--good); font-family:var(--mono); font-size:12.5px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <div class="brand">
+      <h1>AgentTune<span class="dot">.</span>spine</h1>
+      <p>One trajectory schema, driven through every stage of the lifecycle.</p>
+    </div>
+
+    <div>
+      <div class="label">Tasks — one per line</div>
+      <textarea id="tasks">what is 6 x 7?
+capital of France?
+summarize the KYC policy</textarea>
+    </div>
+
+    <div>
+      <div class="label">Agent design</div>
+      <div style="display:flex; gap:8px;">
+        <select id="strat-sel">
+          <option value="react">ReAct</option>
+          <option value="plan_execute">Plan-Execute</option>
+          <option value="reflexion">Reflexion</option>
+          <option value="tot">Tree-of-Thoughts</option>
+          <option value="memory">Memory-ReAct</option>
+        </select>
+        <button id="b-runstrat" style="flex:0 0 auto;">Run</button>
+      </div>
+      <div class="label" style="margin-top:12px;">Memory recall</div>
+      <div style="display:flex; gap:8px;">
+        <button id="b-mem-vector" style="flex:1;">Vector</button>
+        <button id="b-mem-graph" style="flex:1;">Graph</button>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="primary" id="b-collect"><span class="idx">1</span>Collect rollout</button>
+      <button id="b-eval" disabled><span class="idx">2</span>Evaluate</button>
+      <button id="b-distill" disabled><span class="idx">3</span>Distill → student</button>
+      <button id="b-heal" disabled><span class="idx">4</span>Heal — detect failures</button>
+      <button id="b-healloop" disabled><span class="idx">⟳</span>Self-heal loop</button>
+      <button id="b-grpo" disabled><span class="idx">↯</span>Train GRPO</button>
+    </div>
+
+    <div class="foot">
+      <div id="sess">session —</div>
+      <div>GPU-free path runs live · GRPO &amp; full-heal are wired, run on GPU</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="strip" id="strip">
+      <div class="stage" data-s="collect_rollout"><span class="bul"></span>collect</div>
+      <span class="arrow">→</span>
+      <div class="stage" data-s="evaluate_agentic"><span class="bul"></span>evaluate</div>
+      <span class="arrow">→</span>
+      <div class="stage" data-s="distill"><span class="bul"></span>distill</div>
+      <span class="arrow">→</span>
+      <div class="stage" data-s="heal"><span class="bul"></span>heal</div>
+    </div>
+
+    <div class="grid">
+      <section class="pane">
+        <h2>Live event trace <span id="ws-state" class="row-k">connecting…</span></h2>
+        <div class="body"><div class="trace" id="trace">
+          <div class="empty">Run “Collect rollout” to start the trace.</div>
+        </div></div>
+      </section>
+
+      <div class="right">
+        <section class="pane">
+          <h2>Trajectories <span class="row-k" id="traj-n">0</span></h2>
+          <div class="body" id="trajs"><div class="empty">none yet</div></div>
+        </section>
+        <section class="pane">
+          <h2>Evaluation — real metrics</h2>
+          <div class="body" id="metrics"><div class="empty">run evaluate</div></div>
+        </section>
+        <section class="pane">
+          <h2>Distill dataset · Heal</h2>
+          <div class="body" id="tail"><div class="empty">run distill / heal</div></div>
+        </section>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const t0 = performance.now();
+  const ts = () => ((performance.now() - t0) / 1000).toFixed(2) + "s";
+  let pid = null;
+
+  const traceEl = $("#trace");
+  function traceReset(){ traceEl.innerHTML = ""; }
+  function markStage(stage){
+    const el = document.querySelector(`.stage[data-s="${stage}"]`);
+    if (el) el.classList.add("done");
+  }
+  function pushEvent(ev){
+    if (traceEl.querySelector(".empty")) traceEl.innerHTML = "";
+    const row = document.createElement("div");
+    row.className = "ev";
+    const data = Object.entries(ev.data || {})
+      .filter(([k]) => !["scores","per_trajectory"].includes(k))
+      .map(([k,v]) => `<b>${k}=</b>${typeof v === "object" ? JSON.stringify(v) : v}`)
+      .join("  ");
+    row.innerHTML = `<span class="t">${ts()}</span><span class="st">${ev.stage}</span>`
+      + `<span class="kd">${ev.kind} ${data ? "· " + data : ""}</span>`;
+    traceEl.appendChild(row);
+    traceEl.parentElement.scrollTop = traceEl.parentElement.scrollHeight;
+    markStage(ev.stage);
+  }
+
+  async function api(method, path, body){
+    const r = await fetch(path, {
+      method, headers: body ? {"Content-Type":"application/json"} : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!r.ok) throw new Error(`${path} → ${r.status}`);
+    return r.json();
+  }
+
+  function connectWS(){
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${proto}://${location.host}/projects/${pid}/events/ws`);
+    ws.onopen = () => { $("#ws-state").textContent = "● live"; $("#ws-state").style.color = "var(--good)"; };
+    ws.onclose = () => { $("#ws-state").textContent = "○ closed"; $("#ws-state").style.color = "var(--faint)"; };
+    ws.onmessage = (m) => pushEvent(JSON.parse(m.data));
+  }
+
+  async function newSession(){
+    const { project_id } = await api("POST", "/projects");
+    pid = project_id;
+    $("#sess").textContent = `session ${pid}`;
+    connectWS();
+  }
+
+  const tasks = () => $("#tasks").value.split("\n").map(s => s.trim()).filter(Boolean);
+
+  $("#b-collect").onclick = async () => {
+    if (!pid) await newSession();
+    traceReset();
+    document.querySelectorAll(".stage").forEach(s => s.classList.remove("done"));
+    const res = await api("POST", `/projects/${pid}/collect_rollout`, { tasks: tasks() });
+    $("#traj-n").textContent = res.n_trajectories;
+    $("#trajs").innerHTML = res.trajectories.map(t =>
+      `<div class="traj"><span>${t.id.slice(0,8)}</span>`
+      + `<span><span class="tier">${t.tier}</span> · ${t.n_events} events</span></div>`).join("");
+    ["b-eval","b-distill","b-heal","b-healloop","b-grpo"].forEach(id => $("#"+id).disabled = false);
+  };
+
+  $("#b-runstrat").onclick = async () => {
+    if (!pid) await newSession();
+    const strategy = $("#strat-sel").value;
+    const res = await api("POST", `/projects/${pid}/run_strategy`, { strategy });
+    pushEvent({ stage: "run_strategy", kind: "done",
+                data: { strategy: res.strategy, events: res.n_events, answer: res.answer } });
+  };
+
+  async function memDemo(driver) {
+    if (!pid) await newSession();
+    const res = await api("POST", `/projects/${pid}/memory_demo`, { driver });
+    $("#tail").innerHTML =
+      `<div class="row-k" style="font-family:var(--mono);margin-bottom:6px">`
+      + `${driver} recall → query returns:</div>`
+      + res.recalled.map(c => `<div class="traj"><span>${c}</span></div>`).join("");
+  }
+  $("#b-mem-vector").onclick = () => memDemo("vector");
+  $("#b-mem-graph").onclick = () => memDemo("graph");
+
+  $("#b-eval").onclick = async () => {
+    const res = await api("POST", `/projects/${pid}/evaluate`);
+    const ms = res.metrics || {};
+    $("#metrics").innerHTML = Object.entries(ms).map(([k,v]) =>
+      `<div class="metric"><span class="row-k">${k}</span>`
+      + `<span class="bar"><i style="width:${Math.round(Math.max(0,Math.min(1,v))*100)}%"></i></span>`
+      + `<span class="v">${(+v).toFixed(2)}</span></div>`).join("")
+      || `<div class="empty">no metrics</div>`;
+  };
+
+  $("#b-distill").onclick = async () => {
+    const res = await api("POST", `/projects/${pid}/distill`, { student: "student-1.5B" });
+    $("#tail").innerHTML =
+      `<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">`
+      + `<span class="row-k" style="font-family:var(--mono)">${res.n_rows} SFT rows → ${res.student}</span>`
+      + `<span class="badge">${res.status}</span></div>`
+      + `<pre>${JSON.stringify(res.sample_row, null, 1)}</pre>`;
+  };
+
+  $("#b-heal").onclick = async () => {
+    const res = await api("POST", `/projects/${pid}/heal`);
+    const cur = $("#tail").innerHTML.includes("SFT rows") ? $("#tail").innerHTML : "";
+    const f = res.failures || [];
+    $("#tail").innerHTML = cur + (f.length
+      ? f.map(x => `<div class="fail"><span class="ty">${x.failure_type}</span>`
+          + `<span class="row-k">${x.failed_stage_name}</span></div>`).join("")
+      : `<div class="ok">✓ no failures detected in this trace</div>`);
+  };
+
+  $("#b-healloop").onclick = async () => {
+    // seed a stuck agent, then run the full closed loop over it
+    await api("POST", `/projects/${pid}/seed_demo_failure`);
+    const res = await api("POST", `/projects/${pid}/heal_loop`);
+    $("#tail").innerHTML =
+      `<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">`
+      + `<span class="row-k" style="font-family:var(--mono)">`
+      + `${res.n_failures} detected → ${res.n_classified} classified → `
+      + `${res.n_generated} examples → ${res.n_dataset_rows} training rows</span>`
+      + `<span class="badge">${res.status}</span></div>`
+      + `<pre>${JSON.stringify(res.sample_row, null, 1)}</pre>`;
+  };
+
+  $("#b-grpo").onclick = async () => {
+    const res = await api("POST", `/projects/${pid}/train`, { fmt: "grpo" });
+    pushEvent({ stage:"train", kind:"grpo", data:{ status: res.status } });
+  };
+
+  newSession();
+})();
+</script>
+</body>
+</html>

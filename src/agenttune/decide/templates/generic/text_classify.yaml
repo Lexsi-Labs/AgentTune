@@ -1,0 +1,35 @@
+extends: ../../../../../config.yaml
+
+name: "TEXT CLASSIFY"
+id: "generic/text_classify"
+version: "1.0.0"
+description: |
+  Generic decision pipeline for text_classify.
+tags: ["generic"]
+compliance_note: "Domain-agnostic template."
+
+max_total_steps: 30
+
+stages:
+  - id: process
+    type: llm_call
+    description: "Classify the text"
+    prompt: |
+      Classify the text into one of these categories: POSITIVE, NEGATIVE, or NEUTRAL.
+      Respond ONLY with valid JSON (no markdown, no code blocks): {"verdict": "POSITIVE" | "NEGATIVE" | "NEUTRAL", "confidence": <0-10>}
+
+      Text: {input_text}
+    output_schema:
+      type: object
+      properties:
+        verdict: {type: string, enum: ["POSITIVE", "NEGATIVE", "NEUTRAL"]}
+        confidence: {type: integer, minimum: 0, maximum: 10}
+      required: [verdict, confidence]
+    next: output_stage
+
+  - id: output_stage
+    type: output
+    description: "Final output with extracted verdict"
+    verdict_field: "process.output.verdict"
+    confidence_field: "process.output.confidence"
+    destinations: [file]

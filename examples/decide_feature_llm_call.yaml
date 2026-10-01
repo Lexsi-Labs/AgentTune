@@ -1,0 +1,59 @@
+# Feature 1: Basic LLM Call
+# Demonstrates: Simple LLM inference with structured output
+
+template_id: "feature/1_llm_call"
+version: "1.0.0"
+description: "Basic LLM inference stage - analyze text sentiment"
+tags: ["feature", "basic", "llm_call"]
+
+# ─────────────────────────────────────────────────────────────────────
+# Execution Configuration
+# ─────────────────────────────────────────────────────────────────────
+max_total_steps: 5
+
+# ─────────────────────────────────────────────────────────────────────
+# Stages
+# ─────────────────────────────────────────────────────────────────────
+stages:
+  # Stage 1: Extract sentiment using LLM
+  - id: extract_sentiment
+    type: llm_call
+    description: "Analyze text sentiment using Qwen2.5"
+    model: "Qwen/Qwen2.5-7B-Instruct"
+    prompt: |
+      Analyze the sentiment of the following text.
+
+      Text: {input_text}
+
+      Respond in JSON format with:
+      - sentiment: "positive" or "negative" or "neutral"
+      - confidence: 0.0 to 1.0
+      - key_phrases: list of key phrases that indicate sentiment
+
+    output_schema:
+      type: object
+      properties:
+        sentiment:
+          type: string
+          enum: ["positive", "negative", "neutral"]
+        confidence:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+        key_phrases:
+          type: array
+          items:
+            type: string
+      required: [sentiment, confidence, key_phrases]
+
+    temperature: 0.3  # Lower = more deterministic
+    max_tokens: 200
+    next: output_stage
+
+  # Stage 2: Output final verdict
+  - id: output_stage
+    type: output
+    description: "Format and output the decision"
+    verdict: "{extract_sentiment.output.sentiment}"
+    verdict_label: "sentiment_classification"
+    destinations: [file]

@@ -1,0 +1,36 @@
+extends: ../../../../../config.yaml
+
+name: "ANOMALY FLAG"
+id: "generic/anomaly_flag"
+version: "1.0.0"
+description: |
+  Generic decision pipeline for anomaly_flag.
+tags: ["generic"]
+compliance_note: "Domain-agnostic template."
+
+max_total_steps: 30
+
+stages:
+  - id: process
+    type: llm_call
+    description: "Detect anomalies"
+    prompt: |
+      Analyze the given data and detect any anomalies or outliers.
+      Respond ONLY with valid JSON (no markdown, no code blocks): {"verdict": "ANOMALY" | "NORMAL", "confidence": <0-10>, "explanation": "..."}
+
+      Data: {input_text}
+    output_schema:
+      type: object
+      properties:
+        verdict: {type: string, enum: ["ANOMALY", "NORMAL"]}
+        confidence: {type: integer, minimum: 0, maximum: 10}
+        explanation: {type: string}
+      required: [verdict, confidence]
+    next: output_stage
+
+  - id: output_stage
+    type: output
+    description: "Final output with anomaly detection result"
+    verdict_field: "process.output.verdict"
+    confidence_field: "process.output.confidence"
+    destinations: [file]

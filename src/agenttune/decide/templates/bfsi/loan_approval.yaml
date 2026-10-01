@@ -1,0 +1,259 @@
+extends: ../../../../../config.yaml
+
+name: "Loan Approval"
+id: "bfsi/loan_approval"
+version: "1.0.0"
+description: |
+  Evaluate loan applications and make initial approval/denial decisions.
+  Extracts applicant and loan details, validates against rules, analyzes credit and debt capacity,
+  and provides recommendation for approval, conditional approval, or denial.
+tags: ["loan", "credit", "approval", "bfsi"]
+compliance_note: "Compliant with Fair Lending Act and ECOA requirements. All decisions logged for regulatory review."
+
+max_total_steps: 20
+
+stages:
+  - id: extract_application
+    type: llm_call
+    description: "Extract loan application details"
+    prompt: |
+      Extract the following details from the loan application:
+      - Applicant name
+      - Age
+      - Annual income
+      - Employment status (employed, self-employed, retired, seeking)
+      - Requested loan amount
+      - Loan purpose (home, auto, personal, business, other)
+      - Requested loan term (months)
+      - Existing debt (list of current loans/credit accounts)
+      - Collateral offered (if any)
+      - Credit score (if provided)
+
+      Return structured JSON.
+    output_schema:
+      type: object
+      properties:
+        applicant_name:
+          type: string
+        age:
+          type: integer
+        annual_income:
+          type: number
+          description: "Annual income in USD"
+        employment_status:
+          type: string
+          enum: ["employed", "self_employed", "retired", "seeking"]
+        loan_amount:
+          type: number
+          description: "Requested loan amount in USD"
+        loan_purpose:
+          type: string
+          enum: ["home", "auto", "personal", "business", "other"]
+        loan_term_months:
+          type: integer
+        existing_debt:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              balance:
+                type: number
+              monthly_payment:
+                type: number
+        collateral_offered:
+          type: string
+        credit_score:
+          type: integer
+      required: [applicant_name, age, annual_income, employment_status, loan_amount, loan_purpose, loan_term_months]
+    model: "Qwen/Qwen2.5-1.5B-Instruct"
+    next: rule_validation
+
+  - id: rule_validation
+    type: rules
+    description: "Apply standard underwriting rules"
+    rules:
+      - condition: "annual_income > 0"
+        on_fail:
+          goto: extract_application
+          inject: "Annual income is required. Please extract valid income information."
+      - condition: "loan_amount > 0 and loan_amount < annual_income * 10"
+        on_fail:
+          goto: extract_application
+          inject: "Loan amount appears unrealistic. Verify the requested amount is between $0 and 10x annual income."
+      - condition: "loan_term_months >= 3 and loan_term_months <= 360"
+        on_fail:
+          goto: extract_application
+          inject: "Loan term must be between 3 months and 30 years (360 months). Please correct."
+      - condition: "age >= 18 and age <= 100"
+        on_fail:
+          goto: extract_application
+          inject: "Applicant age must be 18-100. Please verify applicant age."
+    next: analysis
+
+  - id: analysis
+    type: parallel
+    description: "Parallel analysis: debt-to-income and credit assessment"
+    branches:
+      - id: dti_analysis
+        type: llm_call
+        description: "Calculate and assess debt-to-income ratio"
+        prompt: |
+          Applicant Financial Assessment:
+          - Annual Income: {extract_application.output.annual_income}
+          - Loan Amount: {extract_application.output.loan_amount}
+          - Loan Term: {extract_application.output.loan_term_months} months
+          - Existing Monthly Debt Payments: Calculate from {extract_application.output.existing_debt}
+
+          Calculate:
+          1. New monthly loan payment (principal + interest at 7% annual)
+          2. Total monthly debt obligations (existing + new loan)
+          3. Debt-to-income ratio (total monthly debt / monthly income)
+          4. Assess debt capacity: DTI < 36% is excellent, 36-43% acceptable, > 43% high risk
+
+          Provide DTI ratio, assessment of debt capacity, and recommendation on debt sustainability.
+        output_schema:
+          type: object
+          properties:
+            new_monthly_payment:
+              type: number
+            total_monthly_debt:
+              type: number
+            dti_ratio:
+              type: number
+              description: "Debt-to-income ratio as percentage"
+            capacity_assessment:
+              type: string
+              enum: ["excellent", "acceptable", "high_risk"]
+            recommendation:
+              type: string
+              enum: ["approve_dti", "approve_conditional", "deny_dti"]
+
+      - id: credit_assessment
+        type: llm_call
+        description: "Assess creditworthiness and risk"
+        prompt: |
+          Credit Evaluation:
+          - Credit Score: {extract_application.output.credit_score}
+          - Existing Debt Load: {extract_application.output.existing_debt}
+          - Employment Status: {extract_application.output.employment_status}
+          - Loan Purpose: {extract_application.output.loan_purpose}
+
+          Assess:
+          1. Credit score meaning (< 580 poor, 580-669 fair, 670-739 good, > 739 excellent)
+          2. Payment history from existing accounts
+          3. Employment stability and income reliability
+          4. Loan purpose risk (secured home loan = lower risk, unsecured personal = higher risk)
+
+          Provide credit score interpretation, risk factors, and approval recommendation.
+        output_schema:
+          type: object
+          properties:
+            credit_quality:
+              type: string
+              enum: ["poor", "fair", "good", "excellent"]
+            risk_factors:
+              type: array
+              items:
+                type: string
+            employment_stability:
+              type: string
+              enum: ["high", "medium", "low"]
+            purpose_risk:
+              type: string
+              enum: ["low", "medium", "high"]
+            recommendation:
+              type: string
+              enum: ["approve_credit", "approve_conditional", "deny_credit"]
+
+    next: decision_judge
+
+  - id: decision_judge
+    type: llm_judge
+    description: "Synthesize analyses and make loan approval decision"
+    prompt: |
+      LOAN APPLICATION REVIEW:
+
+      Applicant: {extract_application.output.applicant_name}, Age {extract_application.output.age}
+      Loan Request: {extract_application.output.loan_amount} USD for {extract_application.output.loan_purpose}
+      Loan Term: {extract_application.output.loan_term_months} months
+
+      FINANCIAL CAPACITY:
+      - Annual Income: {extract_application.output.annual_income}
+      - DTI Ratio: {dti_analysis.output.dti_ratio}%
+      - DTI Assessment: {dti_analysis.output.capacity_assessment}
+      - DTI Recommendation: {dti_analysis.output.recommendation}
+
+      CREDITWORTHINESS:
+      - Credit Score: {extract_application.output.credit_score}
+      - Credit Quality: {credit_assessment.output.credit_quality}
+      - Risk Factors: {credit_assessment.output.risk_factors}
+      - Employment Stability: {credit_assessment.output.employment_stability}
+      - Purpose Risk: {credit_assessment.output.purpose_risk}
+      - Credit Recommendation: {credit_assessment.output.recommendation}
+
+      COLLATERAL:
+      - Offered: {extract_application.output.collateral_offered}
+
+      Decision Framework:
+      - APPROVE: DTI < 43%, credit good/excellent, no major red flags
+      - CONDITIONAL: Acceptable DTI (36-43%), fair credit, manageable risks - may require conditions
+      - DENY: DTI > 43%, poor credit, high-risk combination, inability to service debt
+
+      Provide your decision (APPROVE, CONDITIONAL, DENY), recommended interest rate/conditions,
+      and reasoning.
+    output_schema:
+      type: object
+      properties:
+        decision:
+          type: string
+          enum: ["APPROVE", "CONDITIONAL", "DENY"]
+          description: "Loan approval decision"
+        recommendation:
+          type: string
+          description: "Detailed recommendation and reasoning"
+        interest_rate_recommendation:
+          type: string
+          description: "Recommended interest rate or rate range"
+        conditions:
+          type: array
+          items:
+            type: string
+          description: "Conditions if CONDITIONAL decision"
+        risk_score:
+          type: integer
+          minimum: 0
+          maximum: 10
+          description: "Overall loan risk score (0=lowest risk, 10=highest)"
+    model: "Qwen/Qwen2.5-1.5B-Instruct"
+    max_iterations: 1
+    on_result:
+      - condition: "decision == 'APPROVE'"
+        goto: approve
+      - condition: "decision == 'CONDITIONAL'"
+        goto: conditional_approval
+      - condition: "decision == 'DENY'"
+        goto: deny
+    on_fail: deny
+
+  - id: approve
+    type: output
+    description: "Loan approved"
+    destinations: [file, postgres]
+    verdict: APPROVE
+    verdict_label: "loan_approved"
+
+  - id: conditional_approval
+    type: output
+    description: "Loan conditionally approved pending conditions"
+    destinations: [file, postgres]
+    verdict: CONDITIONAL
+    verdict_label: "loan_conditional"
+
+  - id: deny
+    type: output
+    description: "Loan application denied"
+    destinations: [file, postgres]
+    verdict: DENY
+    verdict_label: "loan_denied"
