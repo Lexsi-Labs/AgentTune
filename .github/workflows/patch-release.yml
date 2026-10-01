@@ -304,7 +304,8 @@ jobs:
           fi
 
       - name: Publish the exact distributions to PyPI
-        if: needs.plan.outputs.pypi-exists == 'false'
+        # Runs on every release/resume; --skip-existing finishes a half-done
+        # upload (e.g. wheel uploaded, sdist not) instead of failing on rerun.
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
@@ -312,7 +313,7 @@ jobs:
         run: |
           set -euo pipefail
           : "${TWINE_PASSWORD:?PYPI_API_TOKEN is required to publish the release}"
-          python -m twine upload --non-interactive --verbose dist/*
+          python -m twine upload --non-interactive --verbose --skip-existing dist/*
 
       - name: Send release notes to Slack
         uses: slackapi/slack-github-action@e28cf165c92ffef168d23c5c9000cffc8a25e117 # v1.24.0
