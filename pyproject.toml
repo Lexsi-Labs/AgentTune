@@ -4,18 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools_scm]
 # Fallback for builds with no git metadata and no SETUPTOOLS_SCM_PRETEND_VERSION
-# (e.g. building a wheel from an unpacked sdist locally). Keep in sync with the
-# latest released tag.
+# (e.g. building a wheel from an unpacked sdist locally). The patch-release
+# workflow also uses it as the version of the very first release, while the repo
+# has no GitHub release yet.
 fallback_version = "1.1.0"
 # Don't append a local "+g<hash>" segment - PyPI rejects local versions, and the
-# publish workflow already guards against dev versions.
+# release workflow checks the built version equals the release tag.
 local_scheme = "no-local-version"
 
 [project]
 name = "agenttune"
 # Version is derived from the git tag by setuptools_scm (see [tool.setuptools_scm]
-# above). CI sets SETUPTOOLS_SCM_PRETEND_VERSION to the release tag when building
-# for PyPI, so a GitHub release tagged 1.2.0 publishes agenttune 1.2.0.
+# above). The release workflow tags the commit before building, so the tag 1.2.0
+# publishes agenttune 1.2.0.
 dynamic = ["version"]
 description = "AgentTune: build agentic workflows, then train, evaluate, distill, and self-heal them through one trajectory schema. A TRL-backed alignment + fine-tuning library (full RL coverage — DPO, PPO, GRPO) with an agentic integration spine on top: agent-design / memory-design / harness-design pillars, a Project lifecycle, and a FastAPI service."
 readme = "README.md"
@@ -24,8 +25,9 @@ license = { text = "Lexsi Labs Source Available License (LSAL) v1.1" }
 authors = [
     {name = "R. E. Zera Marveen Lyngkhoi", email = "zera.lyngkhoi@lexsi.ai"},
     {name = "Abhivansh Gupta"},
-    {name = "Vidushee Vats", email = "vidushee.vats@lexsi.ai"},
+    {name = "Vidushee Vats"},
     {name = "Ram Mohan Rao Kadiyala"},
+    {name = "Vinay Kumar Sankarapu"},
     {name = "Pratinav Seth", email = "pratinav.seth@lexsi.ai"}
 ]
 keywords = [

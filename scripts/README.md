@@ -48,3 +48,6 @@ Roughly in pipeline order:
   for hardcoded credential patterns. Wired into `.pre-commit-config.yaml`.
 - **`verify.sh`** — re-checks the repo's "green state" by hand: runs the GPU-free case studies
   and a strict `mkdocs build`. `./verify.sh`, `./verify.sh studies`, or `./verify.sh docs`.
+- **`release.py`** — pure helpers for `.github/workflows/patch-release.yml` (next patch version,
+  tag/GitHub release/PyPI state classification, built-dist version check). Tested by
+  `tests/test_release.py`.
