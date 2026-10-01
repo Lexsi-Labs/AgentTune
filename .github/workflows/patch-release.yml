@@ -1,0 +1,350 @@
+name: Automated patch release
+
+# One pipeline: plan the version, build at the tag, tag, GitHub release, PyPI,
+# Slack. Replaces the old release.yml (push to main) + publish.yml (on release)
+# pair. The version comes from setuptools_scm, so nothing is committed back to
+# main: the release commit is tagged first and the build reads the tag.
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Exact MAJOR.MINOR.PATCH to release or resume. Leave empty for the next
+          patch after the latest GitHub release.
+        required: false
+        default: ""
+
+concurrency:
+  group: agenttune-patch-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PYPI_PROJECT_NAME: agenttune
+
+jobs:
+  plan:
+    name: Inspect release state
+    # Only the public repo releases; AgentTune_mirror and forks skip every job.
+    # A PR closed without merging, or a dispatch from a branch other than main,
+    # does nothing.
+    if: >-
+      github.repository == 'Lexsi-Labs/AgentTune' &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true))
+    runs-on: ubuntu-latest
+    outputs:
+      action: ${{ steps.plan.outputs.action }}
+      version: ${{ steps.plan.outputs.version }}
+      state: ${{ steps.plan.outputs.state }}
+      reason: ${{ steps.plan.outputs.reason }}
+      source-ref: ${{ steps.plan.outputs.source-ref }}
+      tag-exists: ${{ steps.plan.outputs.tag-exists }}
+      release-exists: ${{ steps.plan.outputs.release-exists }}
+      pypi-exists: ${{ steps.plan.outputs.pypi-exists }}
+    steps:
+      - name: Check out the trusted merged source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Classify trigger and external release state
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha=$(git rev-parse HEAD)
+          trigger=normal
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            trigger=dispatch
+          fi
+
+          explicit=false
+          if [[ -n "${INPUT_VERSION:-}" ]]; then
+            explicit=true
+            requested_version=$(python scripts/release.py validate-version "$INPUT_VERSION")
+          else
+            latest_response=$(mktemp)
+            latest_status=$(curl --silent --show-error --location \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "Accept: application/vnd.github+json" \
+              --output "$latest_response" --write-out '%{http_code}' \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/latest")
+            if [[ "$latest_status" == "200" ]]; then
+              latest_version=$(python -c \
+                'import json,sys; print(json.load(open(sys.argv[1]))["tag_name"])' \
+                "$latest_response")
+              requested_version=$(python scripts/release.py next-version "$latest_version")
+              # This commit is already the latest release (re-run, or a dispatch
+              # with nothing merged since): re-check that version instead of
+              # cutting a new patch, so the plan resolves to resume or no-op.
+              if git show-ref --verify --quiet "refs/tags/$latest_version" &&
+                 [[ "$(git rev-list -n 1 "refs/tags/$latest_version")" == "$source_sha" ]]; then
+                requested_version=$latest_version
+              fi
+            elif [[ "$latest_status" == "404" ]]; then
+              # No GitHub release yet: the first release is the setuptools_scm fallback_version.
+              requested_version=$(python scripts/release.py bootstrap-version)
+            else
+              echo "::error::Latest GitHub release lookup failed with HTTP $latest_status."
+              exit 1
+            fi
+          fi
+
+          tag_exists=false
+          tag_annotated=true
+          tag_matches_source=true
+          source_ref=$source_sha
+          if git show-ref --verify --quiet "refs/tags/$requested_version"; then
+            tag_exists=true
+            # Build from the existing tag: setuptools_scm reads the version from it.
+            source_ref="refs/tags/$requested_version"
+            if [[ "$(git cat-file -t "refs/tags/$requested_version")" != "tag" ]]; then
+              tag_annotated=false
+            fi
+            # An automatic run only resumes a tag on its own commit. A dispatch
+            # naming the version explicitly is the manual way to resume a tag
+            # left behind by an earlier, partly failed run.
+            if [[ "$explicit" == "false" &&
+                  "$(git rev-list -n 1 "refs/tags/$requested_version")" != "$source_sha" ]]; then
+              tag_matches_source=false
+            fi
+          fi
+
+          release_response=$(mktemp)
+          release_status=$(curl --silent --show-error --location \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --output "$release_response" --write-out '%{http_code}' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$requested_version")
+          release_exists=false
+          release_matches_tag=true
+          if [[ "$release_status" == "200" ]]; then
+            release_exists=true
+            if ! python - "$release_response" "$requested_version" <<'PY'
+          import json
+          import sys
+
+          release = json.load(open(sys.argv[1], encoding="utf-8"))
+          expected = sys.argv[2]
+          valid = (
+              release.get("tag_name") == expected
+              and release.get("name") == expected
+              and isinstance(release.get("draft"), bool)
+              and release.get("prerelease") is False
+          )
+          raise SystemExit(0 if valid else 1)
+          PY
+            then
+              release_matches_tag=false
+            fi
+          elif [[ "$release_status" != "404" ]]; then
+            echo "::error::GitHub release lookup failed with HTTP $release_status."
+            exit 1
+          fi
+
+          pypi_response=$(mktemp)
+          pypi_status=$(curl --silent --show-error --location \
+            --output "$pypi_response" --write-out '%{http_code}' \
+            "https://pypi.org/pypi/$PYPI_PROJECT_NAME/$requested_version/json")
+          pypi_exists=false
+          if [[ "$pypi_status" == "200" ]]; then
+            pypi_exists=true
+            python - "$pypi_response" "$requested_version" <<'PY'
+          import json
+          import sys
+
+          payload = json.load(open(sys.argv[1], encoding="utf-8"))
+          if payload.get("info", {}).get("version") != sys.argv[2]:
+              raise SystemExit("PyPI returned metadata for an unexpected version")
+          PY
+          elif [[ "$pypi_status" != "404" ]]; then
+            echo "::error::PyPI lookup failed with HTTP $pypi_status."
+            exit 1
+          fi
+
+          decision=$(python scripts/release.py plan \
+            --trigger "$trigger" --version "$requested_version" \
+            --tag "$tag_exists" --release "$release_exists" --pypi "$pypi_exists" \
+            --tag-annotated "$tag_annotated" \
+            --tag-matches-source "$tag_matches_source" \
+            --release-matches-tag "$release_matches_tag")
+
+          action=$(python -c 'import json,sys; print(json.loads(sys.argv[1])["action"])' "$decision")
+          version=$(python -c 'import json,sys; print(json.loads(sys.argv[1])["version"])' "$decision")
+          state=$(python -c 'import json,sys; print(json.loads(sys.argv[1])["state"])' "$decision")
+          reason=$(python -c 'import json,sys; print(json.loads(sys.argv[1])["reason"])' "$decision")
+          {
+            echo "action=$action"
+            echo "version=$version"
+            echo "state=$state"
+            echo "reason=$reason"
+            echo "source-ref=$source_ref"
+            echo "tag-exists=$tag_exists"
+            echo "release-exists=$release_exists"
+            echo "pypi-exists=$pypi_exists"
+          } >> "$GITHUB_OUTPUT"
+          echo "Release decision: action=$action version=$version state=$state reason=$reason source=$source_ref"
+
+  release:
+    name: Build, release, and publish
+    needs: plan
+    if: github.repository == 'Lexsi-Labs/AgentTune' && needs.plan.outputs.action == 'release'
+    runs-on: ubuntu-latest
+    # GITHUB_TOKEN is enough: tag, GitHub release and PyPI upload all happen in
+    # this job, so nothing has to trigger a second workflow (the reason the old
+    # pipeline needed PERSONAL_ACCESS_TOKEN).
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.plan.outputs.version }}
+    steps:
+      - name: Check out exact release source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan.outputs.source-ref }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Create or verify the annotated tag (local)
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_sha=$(git rev-parse HEAD)
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            if [[ "$(git cat-file -t "refs/tags/$RELEASE_TAG")" != "tag" ]]; then
+              echo "::error::Existing $RELEASE_TAG is not an annotated tag."
+              exit 1
+            fi
+            if [[ "$(git rev-list -n 1 "refs/tags/$RELEASE_TAG")" != "$expected_sha" ]]; then
+              echo "::error::Existing $RELEASE_TAG points at a different commit; it will not be moved."
+              exit 1
+            fi
+          else
+            # Tag before building so setuptools_scm resolves exactly $RELEASE_TAG.
+            # Pushed only after the dists are validated.
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git tag --annotate "$RELEASE_TAG" --message "AgentTune $RELEASE_TAG"
+          fi
+
+      # Tests are intentionally skipped here; ci.yml gates merges to main.
+      - name: Install mandatory packaging tools
+        run: python -m pip install --upgrade build twine
+
+      - name: Build and validate distributions
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset SETUPTOOLS_SCM_PRETEND_VERSION
+          rm -rf dist build
+          python -m build
+          python -m twine check dist/*
+          python scripts/release.py validate-dist "$RELEASE_TAG" --project-name "$PYPI_PROJECT_NAME" dist/*
+
+      - name: Push the tag
+        if: needs.plan.outputs.tag-exists == 'false'
+        run: git push origin "refs/tags/$RELEASE_TAG"
+
+      - name: Create or verify GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" \
+            --json databaseId,tagName,name,isDraft,isPrerelease > release.json 2>/dev/null; then
+            release_state=$(python - "$RELEASE_TAG" <<'PY'
+          import json
+          import sys
+
+          release = json.load(open("release.json", encoding="utf-8"))
+          expected = sys.argv[1]
+          valid = (
+              release.get("tagName") == expected
+              and release.get("name") == expected
+              and isinstance(release.get("isDraft"), bool)
+              and release.get("isPrerelease") is False
+              and isinstance(release.get("databaseId"), int)
+          )
+          if not valid:
+              raise SystemExit(f"Existing GitHub release conflicts with {expected}: {release}")
+          print("draft" if release["isDraft"] else "published")
+          PY
+            )
+            if [[ "$release_state" == "draft" ]]; then
+              release_id=$(python -c 'import json; print(json.load(open("release.json"))["databaseId"])')
+              gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+                --field draft=false --silent
+              echo "Published existing draft GitHub release $RELEASE_TAG."
+            fi
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --generate-notes --title "$RELEASE_TAG"
+          fi
+
+      - name: Publish the exact distributions to PyPI
+        if: needs.plan.outputs.pypi-exists == 'false'
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${TWINE_PASSWORD:?PYPI_API_TOKEN is required to publish the release}"
+          python -m twine upload --non-interactive --verbose dist/*
+
+      - name: Send release notes to Slack
+        uses: slackapi/slack-github-action@e28cf165c92ffef168d23c5c9000cffc8a25e117 # v1.24.0
+        continue-on-error: true
+        with:
+          channel-id: "lexsi-labs-agenttune-release"
+          payload: |
+            {
+              "text": "AgentTune release",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Version:* ${{ env.RELEASE_TAG }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Release:* https://github.com/${{ github.repository }}/releases/tag/${{ env.RELEASE_TAG }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*PyPI:* https://pypi.org/project/agenttune/${{ env.RELEASE_TAG }}/"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
