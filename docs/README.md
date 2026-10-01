@@ -20,7 +20,7 @@ using one normalized trajectory schema, <code>EventLog</code>, for every stage.
 [View on GitHub](https://github.com/Lexsi-Labs/AgentTune){ .md-button }
 
 <p class="at-chips">
-<span>v1.1.0</span>
+<span>v1.0.0</span>
 <span>Python 3.12+</span>
 <span>agentic-spine core is pure Python</span>
 <span>TRL backend</span>

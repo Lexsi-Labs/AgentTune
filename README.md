@@ -5,7 +5,7 @@
 <div align="center">
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12+-3f5257.svg"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-LSAL%20v1.1-6d8288.svg"/></a>
-  <a href="CHANGELOG.md#110---2026-09-28"><img src="https://img.shields.io/badge/version-1.1.0-0f9c8e.svg"/></a>
+  <a href="CHANGELOG.md#100---2026-10-01"><img src="https://img.shields.io/badge/version-1.0.0-0f9c8e.svg"/></a>
   <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-CHANGELOG.md-2e9e6b.svg"/></a>
 </div>
 

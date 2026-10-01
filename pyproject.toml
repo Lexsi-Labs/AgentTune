@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 # (e.g. building a wheel from an unpacked sdist locally). The patch-release
 # workflow also uses it as the version of the very first release, while the repo
 # has no GitHub release yet.
-fallback_version = "1.1.0"
+fallback_version = "1.0.0"
 # Don't append a local "+g<hash>" segment - PyPI rejects local versions, and the
 # release workflow checks the built version equals the release tag.
 local_scheme = "no-local-version"

@@ -55,10 +55,10 @@ def test_plain_semver_rejects_invalid_versions(invalid):
 
 def test_repo_bootstrap_version_is_scm_fallback():
     # First release on a repo with no GitHub release yet.
-    assert bootstrap_version(REPO_ROOT) == "1.1.0"
+    assert bootstrap_version(REPO_ROOT) == "1.0.0"
     state = classify_release_state(Presence(False, False, False))
     decision = decide_action(trigger="normal", version=bootstrap_version(REPO_ROOT), state=state)
-    assert (decision.action, decision.version) == (ReleaseAction.RELEASE, "1.1.0")
+    assert (decision.action, decision.version) == (ReleaseAction.RELEASE, "1.0.0")
 
 
 def test_bootstrap_version_requires_plain_fallback(tmp_path):

@@ -5,7 +5,9 @@ All notable changes to AgentTune will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0] - 2026-09-28
+## [1.0.0] - 2026-10-01
+
+First public release on PyPI. It contains the internal 1.0.0 and 1.1.0 work below.
 
 ### Added
 
@@ -46,9 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A template that renders a `tool` turn empty (Tiny Aya, North) dropped the tool result
   silently; the result is now folded into a user turn, with a warning.
 
-## [1.0.0] - 2026-09-01
+### From internal 1.0.0 (2026-09-01)
 
-First public release. The `agenttune.agentic` public API is frozen under semver —
+The `agenttune.agentic` public API is frozen under semver —
 exports, signatures, `EventKind` / `MemoryKind` values, `EventLog` projection schemas,
 and documented return-dict shapes will not change without a major version bump.
 
