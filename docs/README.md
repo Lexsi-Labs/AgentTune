@@ -9,12 +9,11 @@ hide:
 <img class="at-hero-mark at-hero-mark--light" src="assets/agenttune-logo-black.png" alt="AgentTune">
 <img class="at-hero-mark at-hero-mark--dark" src="assets/agenttune-logo-white.png" alt="AgentTune">
 
-# Train agents that call real tools { .at-hero-title }
+# Train agents that call tools { .at-hero-title }
 
 <p class="at-tagline">
 AgentTune builds agentic workflows, then trains, evaluates, distills, and self-heals them,
-through one normalized trajectory schema, <code>EventLog</code>, instead of five disconnected
-tools.
+using one normalized trajectory schema, <code>EventLog</code>, for every stage.
 </p>
 
 [Get started](getting-started/installation.md){ .md-button .md-button--primary }
@@ -57,19 +56,19 @@ flowchart TB
     CL -.retrained adapter.-> GR
 ```
 
-AgentTune is two things that fit together:
+AgentTune has two parts:
 
 1. **An RL training layer built on TRL** that trains LLM agents to call tools during
    rollouts, running GRPO, PPO, DPO, RLOO, and BCO through one entry point,
-   `create_agentic_trainer(...)`. It's called directly — by the spine's own training code,
-   by DECIDE's closed-loop retrain step, by RAG, and by multi-agent orchestration — rather
-   than living inside any one of them. See [Features](features.md) for the full picture.
+   `create_agentic_trainer(...)`. The spine's own training code, DECIDE's closed-loop
+   retrain step, RAG, and multi-agent orchestration all call it directly; it does not
+   live inside any one of them. See [Features](features.md) for the full list.
 2. **The agentic spine** on top of it: a single normalized trajectory format (`EventLog`)
-   that carries one agent artifact through its entire lifecycle: **build → collect →
+   that carries one agent artifact through its lifecycle: **build → collect →
    evaluate → train → distill → heal.**
 
-Everywhere else you can *run* an agent design. AgentTune lets you **train, evaluate, distill,
-and self-heal** that design, through one shared data schema, not five disconnected tools.
+Most agent tooling covers running an agent design. AgentTune also trains, evaluates, distills,
+and self-heals that design, and every stage uses the same data schema.
 
 <div class="grid cards" markdown>
 
@@ -84,7 +83,7 @@ and self-heal** that design, through one shared data schema, not five disconnect
 
     ---
 
-    GRPO, PPO, DPO, RLOO, BCO through one `create_agentic_trainer(...)` call, on the TRL
+    GRPO, PPO, DPO, RLOO, and BCO through `create_agentic_trainer(...)`, on the TRL
     backend.
 
 -   :material-vector-polyline:{ .lg .middle } **EventLog trajectory schema**
@@ -106,8 +105,8 @@ and self-heal** that design, through one shared data schema, not five disconnect
 
     ---
 
-    Detect a failing agent, classify why, retrain on the failure (real DPO or BCO), and
-    gate redeployment on real accuracy.
+    Detect a failing agent, classify the failure, retrain on it (DPO or BCO), and
+    gate redeployment on accuracy.
 
 -   :material-database-search-outline:{ .lg .middle } **Agentic RAG + data synthesis**
 
@@ -123,7 +122,7 @@ and self-heal** that design, through one shared data schema, not five disconnect
 - **[Getting Started](getting-started/installation.md)**: install, then run your first episode with
   no model, no network, and no GPU.
 - **[Features](features.md)**: every capability in the library, each linked to a notebook
-  that runs it for real.
+  that runs it.
 - **[Concepts: DECIDE & the closed loop](concepts/decide-and-closed-loop.md)**: how the
   YAML decision engine and the self-healing retrain/deploy loop fit together.
 - **[Local Notebooks](notebooks/local-notebook.md)**: 45 total, 30 in `docs/notebooks/`
@@ -142,15 +141,15 @@ This is the AgentTune documentation site. See the
 [root README](https://github.com/Lexsi-Labs/AgentTune) for the full project
 overview, or clone this repo directly to run everything linked from here.
 
-All 30 notebooks were executed fresh in this environment: real models, real data, zero error
-cells, no `!python script.py` shell-outs. Where running the code for real surfaced a bug, the
-relevant notebook's own notes call it out and link the fix upstream.
+All 30 notebooks were executed fresh in this environment with actual models and data, with no
+error cells and no `!python script.py` shell-outs. Where running the code surfaced a bug, the
+notebook's notes describe it and link the upstream fix.
 
 ## Installation & quick start
 
 See **[Getting Started](getting-started/installation.md)** for the install command, the two optional
 extras, and a walked-through first episode (no model, no network, no GPU). For a full
-real-model walkthrough, go straight to the
+walkthrough with a model, go straight to the
 [Local Notebooks](notebooks/local-notebook.md) index and start with notebook 1.
 
 [`src/agenttune/agentic/README.md`](https://github.com/Lexsi-Labs/AgentTune/blob/main/src/agenttune/agentic/README.md)
@@ -177,6 +176,7 @@ If you use AgentTune in your research, please cite:
                   Gupta, Abhivansh and
                   Vats, Vidushee and
                   Kadiyala, Ram Mohan Rao and
+                  Sankarapu, Vinay Kumar and
                   Seth, Pratinav},
   year         = {2026},
   howpublished = {\url{https://github.com/Lexsi-Labs/AgentTune}},
@@ -186,12 +186,12 @@ If you use AgentTune in your research, please cite:
 
 **Plain Text:**
 ```
-Lyngkhoi, R. E. Z. M., Gupta, A., Vats, V., Kadiyala, R. M. R., & Seth, P. (2026).
+Lyngkhoi, R. E. Z. M., Gupta, A., Vats, V., Kadiyala, R. M. R., Sankarapu, V. K., & Seth, P. (2026).
 AgentTune: A toolkit for agentic fine-tuning, distillation, and evaluation.
 https://github.com/Lexsi-Labs/AgentTune
 
-Equal contribution: R E Zera Marveen Lyngkhoi, Abhivansh Gupta, Vidushee Vats
-Corresponding authors: R E Zera Marveen Lyngkhoi, Pratinav Seth
+Equal contribution: R. E. Zera Marveen Lyngkhoi, Abhivansh Gupta, Vidushee Vats
+Corresponding author: Pratinav Seth
 ```
 
 ## Contact

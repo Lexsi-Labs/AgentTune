@@ -11,23 +11,23 @@
 
 ---
 
-**AgentTune** is two things that fit together. An **RL trainer built on TRL** (running GRPO, PPO, DPO, RLOO, BCO through one entry point) that trains LLM agents to call tools during rollouts, not just generate plain text. Layered on top of it sits the **agentic integration spine**: the connective tissue that moves one agent artifact through its whole lifecycle: **build → collect → evaluate → train → distill → heal**.
+**AgentTune** has two parts. The first is an **RL trainer built on TRL** that runs GRPO, PPO, DPO, RLOO, and BCO through one entry point and trains LLM agents to call tools during rollouts. The second, layered on top, is the **agentic integration spine**, which moves one agent artifact through its lifecycle: **build → collect → evaluate → train → distill → heal**.
 
-Everywhere else you can *run* an agent design, a memory system, or a harness. AgentTune trains, evaluates, distills, and self-heals that design through **one normalized trajectory schema** (`EventLog`), instead of stitching together five disconnected tools. It sits on top of whatever agent framework built the design and makes that design **trainable and improvable**.
+Most agent tooling covers running an agent design, a memory system, or a harness. AgentTune also trains, evaluates, distills, and self-heals that design, and every stage reads and writes **one normalized trajectory schema** (`EventLog`), so you don't need a separate tool per stage. It sits on top of whatever agent framework built the design.
 
 ## Core Features
 
-**Agentic Spine**: A single `EventLog` schema that carries one agent artifact through `build → collect → evaluate → train → distill → heal`, in light-tier (observational) and full-tier (trainable, with token spans + logprobs) trajectories, projected from a harness episode, a DECIDE pipeline run, or a bare eval trace, all scored the same way.
+**Agentic Spine**: One `EventLog` schema carries an agent artifact through `build → collect → evaluate → train → distill → heal`. Trajectories come in a light tier (observational) and a full tier (trainable, with token spans and logprobs), can be projected from a harness episode, a DECIDE pipeline run, or a bare eval trace, and are all scored the same way.
 
-**RL Training**: Route every `create_agentic_trainer(algorithm=...)` call through the TRL backend (reliable, battle-tested), for GRPO, PPO, DPO, RLOO, and BCO, all with real agentic tool-calling rollouts, not plain-text generation.
+**RL Training**: Every `create_agentic_trainer(algorithm=...)` call runs on the TRL backend, for GRPO, PPO, DPO, RLOO, and BCO. All five use agentic tool-calling rollouts rather than plain-text generation.
 
-**DECIDE, Decision Workflows as YAML**: Define a business-rule pipeline (`llm_call`, `router`, `llm_judge`, `rules`, `tool_call` stages) as a YAML template instead of code, compiled into a real `langgraph` `StateGraph` with audit logging and step-limit enforcement built in.
+**DECIDE, Decision Workflows as YAML**: A business-rule pipeline (`llm_call`, `router`, `llm_judge`, `rules`, `tool_call` stages) is defined as a YAML template. It compiles into a `langgraph` `StateGraph` with audit logging and step-limit enforcement.
 
-**Self-Healing Closed Loop**: Detect a failing or looping agent, classify why, generate a corrective training example, retrain through the spine's real trainers, and gate redeployment on real accuracy before it touches production again.
+**Self-Healing Closed Loop**: Detects a failing or looping agent, classifies the failure, and generates a corrective training example. The agent is retrained through the spine's trainers, and redeployment is gated on accuracy.
 
-**Agentic RAG + Data Synthesis**: Train a tool-using search agent end-to-end against a real retrieval backend, or turn a raw document corpus into a difficulty-tagged, grounded multi-hop QA training set through a real 6-stage synthesis pipeline.
+**Agentic RAG + Data Synthesis**: Trains a tool-using search agent end-to-end against a retrieval backend, or turns a raw document corpus into a difficulty-tagged, grounded multi-hop QA training set with a 6-stage synthesis pipeline.
 
-**Production-Ready**: No mock code in the trained paths, real GPU-verified runs for every algorithm and component (captured output, honest caveats included), and a documented [Known Issues](docs/community/known-issues.md) page for what's still rough, read from the source and confirmed by running it.
+**Verified runs and known issues**: The trained paths contain no mock code. Every algorithm and component has a GPU run with captured output and its caveats. The [Known Issues](docs/community/known-issues.md) page lists what is still rough, based on reading the source and running it.
 
 ### The pillars of the agentic spine
 
@@ -41,7 +41,7 @@ Additive capability layers, each speaking `EventLog`, each testable with no mode
 6. **RL training**: GRPO/PPO/DPO/RLOO/BCO through `create_agentic_trainer`, on the TRL backend.
 7. **DECIDE**: the YAML decision-workflow engine, independent of the spine, sharing only `EventLog` at the boundary.
 8. **Self-healing closed loop**: detect → classify → generate → retrain → gate → deploy, bridging DECIDE's audit log back into the spine's trainers.
-9. **Agentic RAG + synthesis**: real retrieval-augmented training, and a docs-to-training-data generation pipeline.
+9. **Agentic RAG + synthesis**: retrieval-augmented training, and a docs-to-training-data generation pipeline.
 10. **Multi-agent orchestration**: `AgentTuneGraph` (LangGraph) composes multiple rollout nodes and LLM judges into one GRPO-compatible reward function.
 
 ### Technical Manifest (Feature Mapping)
@@ -53,14 +53,14 @@ Additive capability layers, each speaking `EventLog`, each testable with no mode
 | **Rollout engines** | `agenttune.agentic.rollout_engines` | `transformers` (local), `vllm` (fast batched), `api` (any LiteLLM provider); each is standalone-usable outside training. |
 | **Reward functions** | `agenttune.agentic.rewards.builtin_rewards.REWARD_REGISTRY` | 26 named reward functions, `combine_rewards(...)` for weighted composition. |
 | **LLM-as-Judge** | `agenttune.agentic.rewards.llm_judge.LLMJudge` | Hosted API, local `transformers`, or local `vllm` judge backends. |
-| **DECIDE engine** | `agenttune.decide.graph_runner.GraphRunner` | Compiles a YAML template into a real `langgraph.StateGraph`; audit log, step-limit enforcement, `DestinationRouter`. |
+| **DECIDE engine** | `agenttune.decide.graph_runner.GraphRunner` | Compiles a YAML template into a `langgraph.StateGraph`; audit log, step-limit enforcement, `DestinationRouter`. |
 | **Self-healing** | `agenttune.decide.closed_loop` | `FailureDetector`/`FailureClassifier`/`TrainingExampleGenerator`/`RetrainingTrigger`/`DeploymentGate`. |
-| **Agentic RAG** | `agenttune.rag` | `SQLiteFTSBackend`/`ChromaBackend` retrieval, `SearchCorpusTool`, real GRPO training against a retrieval reward. |
-| **RAG training factory (one call)** | `agenttune.create_rag_trainer` (also `agenttune.rag.create_rag_trainer`) | Builds/indexes the retrieval backend, wires `SearchCorpusTool` + reward defaults, then delegates to `create_agentic_trainer` — pass any custom `reward_funcs`/`tools` to override the defaults. |
+| **Agentic RAG** | `agenttune.rag` | `SQLiteFTSBackend`/`ChromaBackend` retrieval, `SearchCorpusTool`, GRPO training against a retrieval reward. |
+| **RAG training factory (one call)** | `agenttune.create_rag_trainer` (also `agenttune.rag.create_rag_trainer`) | Builds/indexes the retrieval backend, wires `SearchCorpusTool` + reward defaults, then delegates to `create_agentic_trainer`; pass any custom `reward_funcs`/`tools` to override the defaults. |
 | **Docs-to-training-data synthesis** | `agenttune.rag.synthesis` | 6-stage pipeline: typed entity graph → path sampling → answer-first generation → verification → difficulty labeling → leakage-safe split. |
 | **Distillation training factory (one call)** | `agenttune.create_distill_trainer` (also `agenttune.agentic.create_distill_trainer`) | Collects teacher trajectories (hand-authored, pre-built, or live `teacher_engine`+`tasks`) and drives `Project.distill()` with a built-in LoRA+TRL `SFTTrainer` factory (or your own `trainer_factory`/tools/`reward_fn`). |
 | **Multi-agent orchestration** | `agenttune.agentic.langgraph_orchestrator.AgentTuneGraph` | Composes rollout + judge nodes; compiles to a GRPO `rollout_func` or `reward_func`. |
-| **Evaluation** | `agenttune.eval` | `BaseEvaluator`/`RLEvaluator` (ROUGE/BLEU/perplexity/KL/win-rate), `run_eval` (tool-use agent scoring), `LMEvalRunner` (real `lm-eval` CLI integration). |
+| **Evaluation** | `agenttune.eval` | `BaseEvaluator`/`RLEvaluator` (ROUGE/BLEU/perplexity/KL/win-rate), `run_eval` (tool-use agent scoring), `LMEvalRunner` (`lm-eval` CLI integration). |
 | **CLI** | `agenttune.cli.unified` | `agenttune train`, `agenttune pipeline`, `agenttune version`; see [CLI Reference](docs/reference/cli.md). |
 
 ## Quick Start
@@ -80,7 +80,7 @@ proj.evaluate([{"task": "what is 2+3?", "expected": "5"}])    # → mean_score 1
 proj.evaluate_agentic(["what is 2+3?"])                       # real programmatic metrics
 ```
 
-### Agentic RL Training (GRPO): a real tool-using agent
+### Agentic RL Training (GRPO): a tool-using agent
 
 Pass `tools`, a `train_dataset`, and `reward_funcs`. `create_agentic_trainer` builds the tool-calling rollout loop, runs generation, scores each completion with the reward functions, and steps the optimizer. The example below trains a SQL agent on BioGRID.
 
@@ -154,15 +154,15 @@ trainer = create_agentic_trainer(
 )
 
 results = trainer.train()
-print(f"✅ Done — steps: {results.get('total_steps')}  loss: {results.get('final_loss')}")
+print(f"Done. steps: {results.get('total_steps')}  loss: {results.get('final_loss')}")
 ```
 
 ### Agentic RAG training (one call): `create_rag_trainer`
 
-`create_rag_trainer` folds the retrieval-backend build, corpus indexing, `SearchCorpusTool`
-wiring, and RAG reward/system-prompt defaults into one call, then forwards everything else
-(every `create_agentic_trainer` knob) straight through. Bring your own `reward_funcs`
-and/or `tools` any time the defaults don't fit — nothing here is limited to the built-ins.
+`create_rag_trainer` builds the retrieval backend, indexes the corpus, wires up `SearchCorpusTool`,
+and sets the RAG reward and system-prompt defaults, then forwards every other argument
+(any `create_agentic_trainer` option) unchanged. Pass your own `reward_funcs`
+and/or `tools` when the defaults don't fit; you are not limited to the built-ins.
 
 ```python
 from agenttune import create_rag_trainer  # also: from agenttune.rag import create_rag_trainer
@@ -190,8 +190,8 @@ results = trainer.train()
 
 `create_distill_trainer` wraps `Project.distill()`: collect teacher trajectories
 (hand-authored `demonstrations=`, a live `teacher_engine=`+`tasks=`, or pre-built
-`trajectories=`), then train a student with a built-in LoRA+TRL `SFTTrainer` — or swap in
-your own `trainer_factory`, tools, or `reward_fn` for the teacher rollout.
+`trajectories=`), then train a student with a built-in LoRA+TRL `SFTTrainer`. You can
+pass your own `trainer_factory`, tools, or `reward_fn` for the teacher rollout instead.
 
 ```python
 from agenttune import create_distill_trainer  # also: from agenttune.agentic import create_distill_trainer
@@ -335,8 +335,8 @@ pip install -e .
 ```
 
 That single command covers the agentic spine, RL training, the agentic RAG package, extra
-eval metrics, the PostgreSQL DECIDE destination, and the OpenEnv sandbox — no second install
-step needed. A couple of optional extras cover everything else:
+eval metrics, the PostgreSQL DECIDE destination, and the OpenEnv sandbox. Optional extras
+cover the rest:
 
 ```bash
 pip install -e '.[vllm]'        # vLLM generation (use_vllm=True); Linux + CUDA only
@@ -346,7 +346,7 @@ pip install -e '.[dev]'         # test/lint/format tooling for contributors
 pip install -e '.[flash-attn]'  # FlashAttention-2 (needs --no-build-isolation on most systems)
 ```
 
-Unsloth is not a declared dependency or extra — `create_agentic_trainer` runs on TRL by
+Unsloth is not a declared dependency or extra; `create_agentic_trainer` runs on TRL by
 default. If you want the optional, unofficial `backend="unsloth"`/`"auto"` path, install
 it yourself:
 
@@ -367,7 +367,7 @@ See [Backend Selection](docs/getting-started/backend-selection.md) for details.
 
 ## Local Notebooks
 
-`docs/notebooks/` ships **28 executed-fresh local notebooks**: 9 core spine/DECIDE/RAG use-case walkthroughs plus 19 more covering every RL algorithm, sandboxed execution, the tool library, and reward defenses. `examples/USECASES/` adds **15 real end-to-end use-case notebooks** (small open-source models, real datasets, no API key needed anywhere) — 43 in total. `examples/CASE_STUDIES.md` indexes **19 scripted spine walkthroughs**, one per core capability plus industry domains (BFSI, healthcare, legal, retail, general). Full breakdown: **[docs/notebooks/local-notebook.md](docs/notebooks/local-notebook.md)**.
+`docs/notebooks/` ships **28 executed-fresh local notebooks**: 9 core spine/DECIDE/RAG use-case walkthroughs plus 19 more covering every RL algorithm, sandboxed execution, the tool library, and reward defenses. `examples/USECASES/` adds **15 end-to-end use-case notebooks** (small open-source models, public datasets, no API key needed), for 43 in total. `examples/CASE_STUDIES.md` indexes **19 scripted spine walkthroughs**, one per core capability plus industry domains (BFSI, healthcare, legal, retail, general). Full breakdown: **[docs/notebooks/local-notebook.md](docs/notebooks/local-notebook.md)**.
 
 ```bash
 jupyter notebook docs/notebooks/
@@ -376,7 +376,7 @@ jupyter notebook docs/notebooks/
 ## Sample Notebooks
 
 Nine of the local use-case notebooks are also mirrored on Google Colab, needing no local GPU or
-environment setup: open and run. Full list with descriptions:
+environment setup. Full list with descriptions:
 [docs/notebooks/sample-notebook.md](docs/notebooks/sample-notebook.md).
 
 | # | Notebook | Colab |
@@ -396,7 +396,7 @@ environment setup: open and run. Full list with descriptions:
 - **[Spine reference](src/agenttune/agentic/README.md)**: The standalone API-level reference for `Project` and everything it wraps.
 - **[Algorithms Overview](docs/algorithms/overview.md)**: Per-algorithm theory, hyperparameters, and when to reach for which.
 - **[Concepts: DECIDE & the closed loop](docs/concepts/decide-and-closed-loop.md)**: How the YAML decision engine and the self-healing retrain/deploy loop fit together.
-- **[Known Issues](docs/community/known-issues.md)**: What's broken, orphaned, or quietly wrong elsewhere, read from the source and confirmed by running it.
+- **[Known Issues](docs/community/known-issues.md)**: What is broken, orphaned, or silently wrong, found by reading the source and confirmed by running it.
 
 ## Documentation
 
@@ -405,22 +405,22 @@ Full index: [`docs/README.md`](docs/README.md). By area:
 | Area | Start here |
 |---|---|
 | Getting started | [installation & quickstart](docs/getting-started/installation.md) |
-| Every feature | [feature index, each row linked to a notebook that runs it for real](docs/features.md) |
+| Every feature | [feature index, each row linked to a notebook that runs it](docs/features.md) |
 | Agentic spine | [spine reference](src/agenttune/agentic/README.md) · [case studies (19)](examples/CASE_STUDIES.md) |
 | DECIDE & the closed loop | [concepts: DECIDE & the closed loop](docs/concepts/decide-and-closed-loop.md) |
-| Real, GPU-verified runs | [`examples/REAL_EXAMPLES.md`](examples/REAL_EXAMPLES.md), covering every algorithm and component, honest caveats included |
+| GPU runs with captured output | [`examples/REAL_EXAMPLES.md`](examples/REAL_EXAMPLES.md), covering every algorithm and component, with caveats |
 | Notebooks (43, executed fresh) | [`docs/notebooks/`](docs/notebooks/local-notebook.md) |
-| All runnable examples | [`examples/README.md`](examples/README.md), the full index, including the [15 real use-case notebooks](examples/USECASES/README.md) |
+| All runnable examples | [`examples/README.md`](examples/README.md), the full index, including the [15 use-case notebooks](examples/USECASES/README.md) |
 
 ## Key Capabilities
 
 - **One trajectory schema, every stage**: `EventLog` carries an agent artifact through build, collect, evaluate, train, distill, and heal, with no re-instrumentation between stages.
-- **RL training**: the TRL backend, GRPO/PPO/DPO/RLOO/BCO through one factory call.
-- **Agentic tool-calling rollouts**: real multi-turn tool-call loops, not plain-text generation, across every algorithm.
-- **YAML-defined decision workflows**: DECIDE compiles business rules into a real `langgraph` graph, independent of the training stack.
-- **Self-healing**: detect a failing agent, classify why, retrain on the failure, gate redeployment on real accuracy.
+- **RL training**: GRPO, PPO, DPO, RLOO, and BCO run on the TRL backend through one factory function.
+- **Agentic tool-calling rollouts**: every algorithm trains on multi-turn tool-call loops rather than plain-text generation.
+- **YAML-defined decision workflows**: DECIDE compiles business rules into a `langgraph` graph and does not depend on the training stack.
+- **Self-healing**: detects a failing agent, classifies the failure, retrains on it, and gates redeployment on accuracy.
 - **Standalone-usable internals**: rollout engines, reward functions, memory backends, and tools all work outside any training loop.
-- **Honest by design**: every real-model example ships its captured output and its caveats; genuine bugs found while testing are documented, not hidden.
+- **Documented results and bugs**: every example that uses a model ships its captured output and caveats. Bugs found while testing are listed in the docs.
 
 ## Architecture
 
@@ -452,11 +452,11 @@ flowchart TB
     CL -.retrained adapter.-> GR
 ```
 
-The agentic spine and DECIDE are two separate systems that share the `EventLog`/audit-log boundary and the `create_agentic_trainer` RL core: both the spine's own training calls and DECIDE's closed-loop retrain step dispatch through it. You can otherwise use one with no trace of the other in sight. See [Reference: Architecture](docs/reference/architecture.md) for the full package-by-package breakdown.
+The agentic spine and DECIDE are two separate systems that share the `EventLog`/audit-log boundary and the `create_agentic_trainer` RL core: both the spine's own training calls and DECIDE's closed-loop retrain step dispatch through it. Apart from that, either one can be used without the other. See [Reference: Architecture](docs/reference/architecture.md) for the full package-by-package breakdown.
 
 ## Contributing
 
-We welcome contributions! See our [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) for details.
+Contributions are welcome. See the [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) for details.
 
 ## License
 
@@ -476,6 +476,7 @@ If you use AgentTune in your research, please cite:
                   Gupta, Abhivansh and
                   Vats, Vidushee and
                   Kadiyala, Ram Mohan Rao and
+                  Sankarapu, Vinay Kumar and
                   Seth, Pratinav},
   year         = {2026},
   howpublished = {\url{https://github.com/Lexsi-Labs/AgentTune}},
@@ -485,17 +486,17 @@ If you use AgentTune in your research, please cite:
 
 **Plain Text:**
 ```
-Lyngkhoi, R. E. Z. M., Gupta, A., Vats, V., Kadiyala, R. M. R., & Seth, P. (2026).
+Lyngkhoi, R. E. Z. M., Gupta, A., Vats, V., Kadiyala, R. M. R., Sankarapu, V. K., & Seth, P. (2026).
 AgentTune: A toolkit for agentic fine-tuning, distillation, and evaluation.
 https://github.com/Lexsi-Labs/AgentTune
 
 Equal contribution: R. E. Zera Marveen Lyngkhoi, Abhivansh Gupta, Vidushee Vats
-Corresponding authors: R. E. Zera Marveen Lyngkhoi, Pratinav Seth
+Corresponding author: Pratinav Seth
 ```
 
 ## Acknowledgments
 
-AgentTune is built upon the excellent work of the following projects:
+AgentTune is built on the following projects:
 
 - **[HuggingFace Transformers](https://github.com/huggingface/transformers)**: model architectures and tokenizers
 - **[TRL](https://github.com/huggingface/trl)**: Transformer Reinforcement Learning library

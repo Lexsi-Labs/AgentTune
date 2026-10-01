@@ -24,8 +24,9 @@ license = { text = "Lexsi Labs Source Available License (LSAL) v1.1" }
 authors = [
     {name = "R. E. Zera Marveen Lyngkhoi", email = "zera.lyngkhoi@lexsi.ai"},
     {name = "Abhivansh Gupta"},
-    {name = "Vidushee Vats", email = "vidushee.vats@lexsi.ai"},
+    {name = "Vidushee Vats"},
     {name = "Ram Mohan Rao Kadiyala"},
+    {name = "Vinay Kumar Sankarapu"},
     {name = "Pratinav Seth", email = "pratinav.seth@lexsi.ai"}
 ]
 keywords = [
