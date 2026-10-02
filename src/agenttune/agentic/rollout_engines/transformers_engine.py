@@ -6,7 +6,10 @@ import torch.nn.functional as F
 
 from .base import RolloutEngine
 from .rollout_factory import (
+    _ensure_tool_call_arguments_present,
     _keep_tool_results,
+    fallback_chat_template,
+    split_multi_tool_call_turns,
     coerce_tool_call_arguments_to_dict,
     fold_tool_messages_into_user,
 )
@@ -64,6 +67,11 @@ class TransformersRolloutEngine(RolloutEngine):
 
         except (ImportError, Exception):
             pass
+
+        # base checkpoints ship no template: render with a ChatML fallback,
+        # passed per call so the tokenizer itself is left untouched
+        if not getattr(self.tokenizer, "chat_template", None):
+            self._chat_template = fallback_chat_template(self.tokenizer)
 
     # ── Device helpers ────────────────────────────────────────────────────────
 
@@ -234,7 +242,10 @@ class TransformersRolloutEngine(RolloutEngine):
         # plain TypeError ("Can only get item pairs from a mapping")
         # from inside its own template when it isn't.
         conversations = [
-            _keep_tool_results(self.tokenizer, c, self._chat_template) for c in conversations
+            _ensure_tool_call_arguments_present(
+                _keep_tool_results(self.tokenizer, c, self._chat_template)
+            )
+            for c in conversations
         ]
         attempts = [
             conversations,
@@ -244,6 +255,8 @@ class TransformersRolloutEngine(RolloutEngine):
                 coerce_tool_call_arguments_to_dict(fold_tool_messages_into_user(c))
                 for c in conversations
             ],
+            [split_multi_tool_call_turns(c) for c in conversations],
+            [coerce_tool_call_arguments_to_dict(split_multi_tool_call_turns(c)) for c in conversations],
         ]
         last_err: Exception | None = None
         silent_drop_fallback: dict | None = None

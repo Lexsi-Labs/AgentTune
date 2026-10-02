@@ -369,7 +369,12 @@ class Project:
             n_rows=len(rows),
             n_teacher_trajectories=len(full),
         )
-        trainer = trainer_factory(model=student, train_dataset=rows, **trainer_kwargs)
-        result = trainer.train()
+        from agenttune.agentic.rollout_engines.rollout_factory import chat_template_fallback
+
+        # the factory's trainer renders rows itself (TRL SFTTrainer): let base
+        # students and strict-alternation templates (Gemma) render too
+        with chat_template_fallback():
+            trainer = trainer_factory(model=student, train_dataset=rows, **trainer_kwargs)
+            result = trainer.train()
         self._emit("distill", "done", student=student, result=result)
         return result

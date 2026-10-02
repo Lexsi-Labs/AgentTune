@@ -929,6 +929,14 @@ class TrlAgenticPPO:
                 tokenizer = AutoTokenizer.from_pretrained(
                     model_arg, trust_remote_code=trust_remote_code
                 )
+                # our own tokenizer: a base checkpoint gets the ChatML fallback
+                from agenttune.agentic.rollout_engines.rollout_factory import (
+                    fallback_chat_template,
+                )
+
+                fallback = fallback_chat_template(tokenizer)
+                if fallback:
+                    tokenizer.chat_template = fallback
             else:
                 raise ValueError("[TrlAgenticPpo] 'processing_class' (tokenizer) is required.")
         if tokenizer.pad_token is None:
@@ -1096,10 +1104,14 @@ class TrlAgenticPPO:
             )
             logger.info("[TrlAgenticPpo] rollout_func built ✓")
 
+        from agenttune.agentic.rollout_engines.rollout_factory import ensure_lora_targets
+
+        # PPOTrainer gets the tokenizer/policy_model resolved above, not trainer_kw
         # This pop is enough — pulls it out of trainer_kw so it's not passed twice
         peft_config = _resolve_peft_config(
             trainer_kw.pop("peft_config", None) or self.kwargs.get("peft_config")
         )
+        peft_config = ensure_lora_targets(peft_config, policy_model)
 
         # ── Step 2: Instantiate PPOTrainer ────────────────────────────────
         self.trainer = PPOTrainer(
