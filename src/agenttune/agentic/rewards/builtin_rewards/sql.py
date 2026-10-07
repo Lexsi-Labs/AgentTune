@@ -6,9 +6,20 @@ Add new functions here — they are auto-discovered via REWARD_REGISTRY below.
 import logging
 import re
 
+from agenttune.agentic.rollout_engines.tool_call_parse import _THINK_BLOCK_RE
 from agenttune.utils.score_logger import log_score
 
 logger = logging.getLogger(__name__)
+
+# A reasoning block cut off by the token limit has no closing tag; drop it to the end.
+_OPEN_THINK_RE = re.compile(r"(?:<think>|<\|START_THINKING\|>).*\Z", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_thinking(text: str) -> str:
+    """Remove reasoning blocks (Qwen ``<think>``, Cohere ``<|START_THINKING|>``,
+    Harmony analysis) so only the answer itself is scored. Text without them is
+    returned unchanged."""
+    return _OPEN_THINK_RE.sub("", _THINK_BLOCK_RE.sub("", text))
 
 
 # ── Individual reward functions ───────────────────────────────────────────────
@@ -143,6 +154,8 @@ def reward_correct_answer(completions, answer=None, **kwargs):
                     break
         else:
             final_text = str(comp)
+        # A number the model only mentions while reasoning is not its answer.
+        final_text = _strip_thinking(final_text)
         numbers = re.findall(r"-?\d+\.?\d*", final_text)
         try:
             gt_val = float(gt)

@@ -155,10 +155,15 @@ def _patch_dpo_training_step(trainer_class) -> None:
         model.train()
         device = self.accelerator.device
         tokenizer = self.processing_class
+        # A multimodal processor (e.g. Qwen3.5's Qwen3VLProcessor) has no pad/eos
+        # ids itself; they live on its inner tokenizer.
+        inner_tok = getattr(self.processing_class, "tokenizer", self.processing_class)
         pad_id = (
             getattr(self, "pad_token_id", None)
             or getattr(self.processing_class, "pad_token_id", None)
+            or getattr(inner_tok, "pad_token_id", None)
             or getattr(self.processing_class, "eos_token_id", None)
+            or getattr(inner_tok, "eos_token_id", None)
         )
 
         # ── 1. Decode prompts ─────────────────────────────────────────────
@@ -556,10 +561,17 @@ class TrlAgenticDPO:
         trainer_kw["train_dataset"] = self.train_dataset
         trainer_kw["eval_dataset"] = self.eval_dataset
 
+        from agenttune.agentic.rollout_engines.rollout_factory import (
+            ensure_lora_targets,
+            ensure_processing_class,
+        )
+
+        ensure_processing_class(trainer_kw)
         # This pop is enough — pulls it out of trainer_kw so it's not passed twice
         peft_config = _resolve_peft_config(
             trainer_kw.pop("peft_config", None) or self.kwargs.get("peft_config")
         )
+        peft_config = ensure_lora_targets(peft_config, trainer_kw.get("model"))
         self.trainer = DPOTrainer(
             **trainer_kw,
             peft_config=peft_config,

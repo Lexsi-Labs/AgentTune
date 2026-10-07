@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import inspect
 import json
 import re
@@ -141,6 +142,203 @@ def fold_tool_messages_into_user(
     return folded
 
 
+# Used only when a tokenizer ships no chat template at all (base checkpoints
+# such as tiny-aya-base). Tool calls are rendered as JSON so the model still
+# sees its own calls in the history.
+_CHATML_FALLBACK_TEMPLATE = (
+    "{% for m in messages %}<|im_start|>{{ m['role'] }}\n{{ m['content'] or '' }}"
+    "{% if m.tool_calls is defined and m.tool_calls %}{{ m.tool_calls | tojson }}{% endif %}"
+    "<|im_end|>\n{% endfor %}"
+    "{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}"
+)
+
+_WARNED_NO_TEMPLATE: set[str] = set()
+
+
+def fallback_chat_template(tokenizer) -> str | None:
+    """A ChatML template for a tokenizer that has none, else None.
+
+    Never assigned to the tokenizer: callers pass it as ``chat_template=``, so a
+    saved checkpoint keeps whatever template it shipped with."""
+    if tokenizer is None or getattr(tokenizer, "chat_template", None):
+        return None
+    name = str(getattr(tokenizer, "name_or_path", "this model"))
+    if name not in _WARNED_NO_TEMPLATE:
+        _WARNED_NO_TEMPLATE.add(name)
+        warnings.warn(
+            f"{name} has no chat template (base checkpoint?); rendering with a "
+            "plain ChatML template instead.",
+            UserWarning,
+            stacklevel=3,
+        )
+    return _CHATML_FALLBACK_TEMPLATE
+
+
+def ensure_processing_class(trainer_kw: dict) -> None:
+    """Fill in ``processing_class`` only where TRL's own default would fail.
+
+    With no ``processing_class`` TRL calls ``AutoProcessor.from_pretrained``,
+    which raises for text-only checkpoints whose config maps to a multimodal
+    processor (google/gemma-3-1b-it has no preprocessor_config.json), and
+    yields a tokenizer with no chat template for base checkpoints. In those two
+    cases load the tokenizer ourselves (and give it the ChatML fallback, which
+    is safe since this tokenizer object is ours). Otherwise leave trainer_kw
+    alone so TRL's default -- including real multimodal processors -- applies."""
+    model = trainer_kw.get("model")
+    if trainer_kw.get("processing_class") is not None or not isinstance(model, str):
+        return
+    from transformers import AutoProcessor, AutoTokenizer
+
+    try:
+        proc = AutoProcessor.from_pretrained(model)
+    except Exception:
+        proc = None
+    if proc is not None:
+        tok = getattr(proc, "tokenizer", proc)
+        if getattr(tok, "chat_template", None) or tok is not proc:
+            return  # TRL's default works as-is
+    try:
+        tok = AutoTokenizer.from_pretrained(model)
+    except Exception as e:  # leave it to TRL's own default (and its error)
+        warnings.warn(f"tokenizer fallback skipped for {model}: {e}", stacklevel=2)
+        return
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    fb = fallback_chat_template(tok)
+    if fb:
+        tok.chat_template = fb
+    trainer_kw["processing_class"] = tok
+
+
+def ensure_lora_targets(peft_config, model) -> Any:
+    """Set ``target_modules="all-linear"`` on a LoRA config that names no targets,
+    but only for architectures missing from peft's default target map (e.g.
+    Cohere / Cohere2), where peft would otherwise raise "Please specify
+    `target_modules`". Architectures peft knows keep peft's own default."""
+    if peft_config is None or getattr(peft_config, "peft_type", None) is None:
+        return peft_config
+    if str(getattr(peft_config.peft_type, "value", peft_config.peft_type)) != "LORA":
+        return peft_config
+    if getattr(peft_config, "target_modules", None) or getattr(
+        peft_config, "target_parameters", None
+    ):
+        return peft_config
+    try:
+        from peft.utils.constants import TRANSFORMERS_MODELS_TO_LORA_TARGET_MODULES_MAPPING
+
+        cfg = getattr(model, "config", None)
+        if cfg is None and isinstance(model, str):
+            from transformers import AutoConfig
+
+            cfg = AutoConfig.from_pretrained(model)
+        model_type = getattr(cfg, "model_type", None)
+    except Exception:
+        return peft_config
+    if model_type and model_type not in TRANSFORMERS_MODELS_TO_LORA_TARGET_MODULES_MAPPING:
+        warnings.warn(
+            f"peft has no default LoRA targets for model_type={model_type!r}; "
+            'using target_modules="all-linear".',
+            UserWarning,
+            stacklevel=2,
+        )
+        peft_config.target_modules = "all-linear"
+    return peft_config
+
+
+def _merge_system_into_user(conversation: list[dict]) -> list[dict]:
+    """Prepend any system turn's text to the first user turn, then merge
+    consecutive same-role turns (strict-alternation templates such as Gemma's
+    reject both a "system" turn and two same-role turns in a row)."""
+    system = [str(m.get("content") or "") for m in conversation if m.get("role") == "system"]
+    rest = [m for m in conversation if m.get("role") != "system"]
+    if system and rest and rest[0].get("role") == "user":
+        rest[0] = {**rest[0], "content": "\n\n".join([*system, str(rest[0].get("content") or "")])}
+    merged: list[dict] = []
+    for m in rest:
+        if merged and merged[-1].get("role") == m.get("role"):
+            a, b = str(merged[-1].get("content") or ""), str(m.get("content") or "")
+            merged[-1] = {**merged[-1], "content": "\n\n".join(x for x in (a, b) if x)}
+        else:
+            merged.append(m)
+    return merged
+
+
+@contextlib.contextmanager
+def chat_template_fallback():
+    """Scoped patch for code paths AgentTune doesn't render itself (e.g. a
+    user-supplied TRL SFTTrainer factory in Project.distill):
+
+    * a tokenizer with no chat template renders with the ChatML fallback
+      instead of raising;
+    * a strict-alternation template ("Conversation roles must alternate",
+      Gemma) is retried with tool results folded into user turns, the system
+      prompt merged into the first user turn and same-role runs merged.
+
+    Only calls that would otherwise raise are affected, and the original
+    methods are restored on exit."""
+    from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+
+    orig_get = PreTrainedTokenizerBase.get_chat_template
+    orig_apply = PreTrainedTokenizerBase.apply_chat_template
+
+    def get_chat_template(self, chat_template=None, tools=None):
+        if chat_template is None:
+            chat_template = fallback_chat_template(self)
+        return orig_get(self, chat_template=chat_template, tools=tools)
+
+    def apply_chat_template(self, conversation, *args, **kwargs):
+        try:
+            return orig_apply(self, conversation, *args, **kwargs)
+        except Exception as e:
+            if "roles must alternate" not in str(e) or not isinstance(conversation, list):
+                raise
+            single = bool(conversation) and isinstance(conversation[0], dict)
+            convs = [conversation] if single else conversation
+            fixed = [_merge_system_into_user(fold_tool_messages_into_user(c)) for c in convs]
+            return orig_apply(self, fixed[0] if single else fixed, *args, **kwargs)
+
+    PreTrainedTokenizerBase.get_chat_template = get_chat_template
+    PreTrainedTokenizerBase.apply_chat_template = apply_chat_template
+    try:
+        yield
+    finally:
+        PreTrainedTokenizerBase.get_chat_template = orig_get
+        PreTrainedTokenizerBase.apply_chat_template = orig_apply
+
+
+def split_multi_tool_call_turns(conversation: list[dict]) -> list[dict]:
+    """Rewrite an assistant turn carrying N>1 ``tool_calls`` as N consecutive
+    single-call assistant turns, each followed by its own tool result (matched
+    in order). Llama-3.x's template raises "This model only supports single
+    tool-calls at once!" on a parallel-call turn; no other repair helps."""
+    out: list[dict] = []
+    i = 0
+    while i < len(conversation):
+        msg = conversation[i]
+        calls = msg.get("tool_calls") or []
+        if msg.get("role") != "assistant" or len(calls) < 2:
+            out.append(msg)
+            i += 1
+            continue
+        j = i + 1
+        results = []
+        while j < len(conversation) and conversation[j].get("role") == "tool":
+            results.append(conversation[j])
+            j += 1
+        by_id = {r.get("tool_call_id"): r for r in results if r.get("tool_call_id")}
+        unmatched = [r for r in results if not r.get("tool_call_id") or r.get("tool_call_id") not in {c.get("id") for c in calls}]
+        for k, call in enumerate(calls):
+            out.append({**msg, "tool_calls": [call], "content": msg.get("content") if k == 0 else ""})
+            res = by_id.get(call.get("id")) if call.get("id") else None
+            if res is None and unmatched:
+                res = unmatched.pop(0)  # no ids: pair results with calls in order
+            if res is not None:
+                out.append(res)
+        out.extend(unmatched)
+        i = j
+    return out
+
+
 def _is_folded_tool_result(content: str, tool_result_format: str) -> bool:
     """True if a user turn's ``content`` was written by ``fold_tool_messages_into_user``
     with ``tool_result_format``."""
@@ -258,13 +456,25 @@ def _render_chat_template(
     (Llama-3.2's template ``tojson``s it unguarded).
     """
     kwargs.setdefault("add_generation_prompt", True)
+    if not kwargs.get("chat_template"):
+        fallback = fallback_chat_template(tokenizer)
+        if fallback:
+            kwargs["chat_template"] = fallback
     conversation = _ensure_tool_call_arguments_present(
-        _keep_tool_results(tokenizer, conversation, tool_result_format=tool_result_format)
+        _keep_tool_results(
+            tokenizer,
+            conversation,
+            chat_template=kwargs.get("chat_template"),
+            tool_result_format=tool_result_format,
+        )
     )
     folded = fold_tool_messages_into_user(conversation, tool_result_format)
+    split = split_multi_tool_call_turns(conversation)
     variants = [
         coerce_tool_call_arguments_to_dict(conversation),
         conversation,
+        coerce_tool_call_arguments_to_dict(split),
+        split,
         coerce_tool_call_arguments_to_dict(folded),
         folded,
     ]
@@ -2616,3 +2826,4 @@ def create_dpo_rollout_fn(
         }
 
     return dpo_rollout_fn
+

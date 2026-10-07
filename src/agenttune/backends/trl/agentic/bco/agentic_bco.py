@@ -613,9 +613,16 @@ class TrlAgenticBCO:
         from agenttune.agentic.rollout_engines.rollout_factory import create_rollout_fn
 
         config_kw, trainer_kw = _split_kwargs_for_bco(self.kwargs)
+        from agenttune.agentic.rollout_engines.rollout_factory import (
+            ensure_lora_targets,
+            ensure_processing_class,
+        )
+
+        ensure_processing_class(trainer_kw)
         peft_config = _resolve_peft_config(
             trainer_kw.pop("peft_config", None) or self.kwargs.get("peft_config")
         )
+        peft_config = ensure_lora_targets(peft_config, trainer_kw.get("model"))
 
         # ── Config defaults ───────────────────────────────────────────────
         output_dir = _get(self.kwargs, "output_dir", default="./output/bco_agentic")
@@ -831,10 +838,17 @@ class TrlAgenticBCO:
             else:
                 trainer_kw.setdefault(opt_key, None)
 
+        from agenttune.agentic.rollout_engines.rollout_factory import (
+            ensure_lora_targets,
+            ensure_processing_class,
+        )
+
+        ensure_processing_class(trainer_kw)
         # This pop is enough — pulls it out of trainer_kw so it's not passed twice
         peft_config = _resolve_peft_config(
             trainer_kw.pop("peft_config", None) or self.kwargs.get("peft_config")
         )
+        peft_config = ensure_lora_targets(peft_config, trainer_kw.get("model"))
         self.trainer = TrainerClass(**trainer_kw, peft_config=peft_config)
         logger.info("[TrlAgenticBCO] BCOTrainer instantiated ✓")
 
