@@ -798,16 +798,11 @@ optional `_parameters()` override (JSON Schema for the tool's arguments, feeds
 `success: bool`, `output: Any`, `error: Optional[str]`, `metadata: dict`.
 
 `ToolRegistry` (`tools/registry.py`) is a class-level registry: `ToolRegistry.get(name)`
-auto-registers every builtin on first call and looks the tool up by name;
-`register_custom(tool)` adds your own. **One gotcha worth flagging up front**: calling
-`ToolRegistry.get()` for *any* tool, even a pure-stdlib one like `read_file`, triggers
-`auto_register_builtins()`, which unconditionally imports every builtin module at once,
-including the `langchain_community`-dependent ones (Slack/GitHub/Playwright/SQL/web-search).
-Without `langchain_community` installed, even fetching `read_file` through the registry
-raises `ImportError`. See
-[Known Issues](../community/known-issues.md#looks-like-it-works-doesnt-or-gives-a-quietly-wrong-answer)
-for the full note. The workaround used throughout this page is simply importing the tool
-classes directly by module path instead of going through the registry.
+looks the tool up by name, importing and registering a builtin the first time its name is
+fetched; `register_custom(tool)` adds your own (replacing any builtin of the same name).
+Only the `langchain_community`-dependent builtins (Slack/GitHub/Playwright/SQL/web-search)
+import `langchain_community`. The examples on this page import tool classes directly by
+module path; fetching the same tools through the registry works too.
 
 ### The zero-dependency tools
 

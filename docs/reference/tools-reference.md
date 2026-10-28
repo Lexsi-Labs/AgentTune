@@ -72,16 +72,15 @@ just class-level state:
 |---|---|
 | `ToolRegistry.register(tool)` | Adds/overwrites `tool.name` in the registry |
 | `ToolRegistry.register_custom(tool)` | Identical to `register()`: the documented entry point for user tools |
-| `ToolRegistry.get(name)` | Triggers `auto_register_builtins()` on first call ever, then looks up `name`; raises `KeyError` (listing everything registered) if not found |
+| `ToolRegistry.get(name)` | Looks up `name`, first importing and registering its builtin if nothing is registered under that name yet; raises `KeyError` (listing every available name) if not found |
 | `ToolRegistry.get_many(names)` | `[cls.get(n) for n in names]` |
-| `ToolRegistry.list_all()` / `.list_tools()` | Same thing; `list_tools()` is a back-compat alias |
-| `ToolRegistry.auto_register_builtins()` | Imports and instantiates all 13 builtins below with zero constructor args, once |
+| `ToolRegistry.list_all()` / `.list_tools()` | Registered names plus builtins not fetched yet; `list_tools()` is a back-compat alias |
+| `ToolRegistry.auto_register_builtins()` | Imports and instantiates every builtin below that isn't registered yet, with zero constructor args; `get()` doesn't need it |
 
-!!! warning "`ToolRegistry.get()` can fail on an unrelated missing dependency"
-    `auto_register_builtins()` imports **every** builtin module unconditionally, including
-    the `langchain_community`-dependent ones (SQL/web-search/Slack/GitHub/Playwright).
-    Without `langchain_community` installed, even `ToolRegistry.get("read_file")`, pure
-    stdlib, raises `ImportError`. See [Known Issues](../community/known-issues.md).
+!!! note "Builtins are imported on first fetch"
+    `ToolRegistry.get(name)` imports only that builtin's module. The
+    `langchain_community`-dependent builtins (SQL/web-search/Slack/GitHub/Playwright) raise
+    `ImportError` on fetch if it isn't installed; the others never import it.
 
 Also note: the registry instantiates `SQLDatabaseTool()` with no `db_uri`. A copy fetched via
 `ToolRegistry.get("sql_database")` will raise `ValueError` on every action until you
@@ -105,8 +104,8 @@ timeout into `TimeoutError(f"Tool execution timed out after {timeout_sec}s")`.
 
 ## The 13 auto-registered builtins
 
-These are exactly what `ToolRegistry.auto_register_builtins()` instantiates, fetchable by
-name via `ToolRegistry.get(...)` immediately, no manual registration needed. Actions/params
+These are the registry's builtins, each imported on first fetch by name via
+`ToolRegistry.get(...)`, no manual registration needed. Actions/params
 are **not uniform** across tools; each row is that tool's real `execute()` signature.
 
 | Class | File | `execute()`: actions / params | What it does | Needs |
@@ -168,7 +167,7 @@ built to be passed directly as plain-callable tools (not through the registry):
 ## Real but not auto-registered
 
 Three more tool-shaped things live under `tools/builtin/` but are **absent** from
-`auto_register_builtins()`; `ToolRegistry.get(...)` will never find them. Use them by
+the registry's builtins; `ToolRegistry.get(...)` will never find them. Use them by
 importing directly.
 
 | Name | File | How to get it | What it does | Needs |

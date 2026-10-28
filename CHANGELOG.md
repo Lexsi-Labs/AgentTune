@@ -5,6 +5,26 @@ All notable changes to AgentTune will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `agenttune train --tools read_file,list_dir`: comma-separated `ToolRegistry` names,
+  passed to the trainer as `tools=`, so agentic tool-calling training runs from the CLI.
+
+### Changed
+
+- `ToolRegistry.auto_register_builtins()` skips names that are already registered instead of
+  overwriting them, and `get()` no longer calls it.
+
+### Fixed
+
+- `ToolRegistry.get(name)` imports only the requested builtin's module; fetching
+  `read_file` no longer raises `ImportError` when `langchain_community` isn't installed.
+- A tool registered with `register_custom()` under a builtin's name (e.g. a sandboxed
+  `run_bash`) was replaced by the builtin on the first `get()`; it now takes precedence.
+- `ToolRegistry.list_all()` returned `[]` until the first `get()`; it now includes builtins.
+
 ## [1.1.0] - 2026-09-28
 
 ### Added

@@ -1,20 +1,41 @@
+import importlib
+
 from .base import BaseTool
+
+# Builtin tool name -> (module under .builtin, class name). Each builtin is imported
+# on first get() of its name, so fetching one tool never imports another tool's
+# dependencies (e.g. langchain_community for slack/github/playwright/sql/web_search).
+_BUILTINS: dict[str, tuple[str, str]] = {
+    "read_file": ("file_tools", "ReadFileTool"),
+    "write_file": ("file_tools", "WriteFileTool"),
+    "list_dir": ("file_tools", "ListDirTool"),
+    "run_python": ("code_tools", "RunPythonTool"),
+    "run_bash": ("code_tools", "RunBashTool"),
+    "grep": ("search_tools", "GrepTool"),
+    "http_get": ("api_tools", "HttpGetTool"),
+    "http_post": ("api_tools", "HttpPostTool"),
+    "web_search": ("web_search_tool", "WebSearchTool"),
+    "slack": ("slack", "SlackTool"),
+    "sql_database": ("sql", "SQLDatabaseTool"),
+    "github": ("github", "GitHubTool"),
+    "playwright_browser": ("playright", "PlaywrightTool"),
+}
 
 
 class ToolRegistry:
     """
     Central registry for all tools.
-    Builtins are auto-registered on first use.
-    Users can add tools via register_custom().
+    Builtins are imported and registered one at a time, on first get() of their name.
+    Users can add tools via register_custom(); a tool registered under a builtin's
+    name replaces that builtin.
 
     To add a new builtin category:
         1. Create src/agenttune/agentic/tools/builtin/my_tools.py
-        2. Add import + register calls in auto_register_builtins()
+        2. Add a name -> (module, class) entry per tool to _BUILTINS
         3. Done
     """
 
     _tools: dict[str, BaseTool] = {}
-    _builtins_registered: bool = False
 
     @classmethod
     def register(cls, tool: BaseTool):
@@ -27,8 +48,8 @@ class ToolRegistry:
 
     @classmethod
     def get(cls, name: str) -> BaseTool:
-        if not cls._builtins_registered:
-            cls.auto_register_builtins()
+        if name not in cls._tools and name in _BUILTINS:
+            cls._register_builtin(name)
         if name not in cls._tools:
             raise KeyError(f"Tool '{name}' not found. Available: {cls.list_all()}")
         return cls._tools[name]
@@ -39,7 +60,8 @@ class ToolRegistry:
 
     @classmethod
     def list_all(cls) -> list[str]:
-        return list(cls._tools.keys())
+        """Registered tools plus builtins that get() imports on first fetch."""
+        return list(dict.fromkeys([*cls._tools, *_BUILTINS]))
 
     @classmethod
     def list_tools(cls) -> list[str]:
@@ -48,32 +70,17 @@ class ToolRegistry:
 
     @classmethod
     def auto_register_builtins(cls):
-        """Register all builtin tools. Called automatically on first get()."""
-        from .builtin.api_tools import HttpGetTool, HttpPostTool
-        from .builtin.code_tools import RunBashTool, RunPythonTool
-        from .builtin.file_tools import ListDirTool, ReadFileTool, WriteFileTool
-        from .builtin.github import GitHubTool
-        from .builtin.playright import PlaywrightTool
-        from .builtin.search_tools import GrepTool
-        from .builtin.slack import SlackTool
-        from .builtin.sql import SQLDatabaseTool
-        from .builtin.web_search_tool import WebSearchTool
+        """Register every builtin not already registered, importing all of their modules.
 
-        builtins = [
-            ReadFileTool(),
-            WriteFileTool(),
-            ListDirTool(),
-            RunPythonTool(),
-            RunBashTool(),
-            GrepTool(),
-            HttpGetTool(),
-            HttpPostTool(),
-            WebSearchTool(),
-            SlackTool(),
-            SQLDatabaseTool(),
-            GitHubTool(),
-            PlaywrightTool(),
-        ]
-        for tool in builtins:
-            cls.register(tool)
-        cls._builtins_registered = True
+        get() doesn't need this. Use it to load the whole builtin set up front; it
+        requires every builtin's dependencies to be installed.
+        """
+        for name in _BUILTINS:
+            if name not in cls._tools:
+                cls._register_builtin(name)
+
+    @classmethod
+    def _register_builtin(cls, name: str):
+        module_name, class_name = _BUILTINS[name]
+        module = importlib.import_module(f".builtin.{module_name}", __package__)
+        cls.register(getattr(module, class_name)())

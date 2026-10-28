@@ -265,15 +265,11 @@ trainer = create_agentic_trainer(
 
 `SQLDatabaseTool` also exposes `create_from_dataset(dataset_name, table_name="data",
 split="train")` to build a fresh SQLite file from any HF dataset, and `list_tables()` /
-`schema(tables)` for inspection. Per [Known Issues](../community/known-issues.md), fetching
-*any* builtin tool through `ToolRegistry.get(...)` triggers
-`auto_register_builtins()`, which unconditionally imports every builtin tool module,
-including `SQLDatabaseTool`'s `langchain_community` imports. Importing `SQLDatabaseTool`
-directly (as above) sidesteps the registry entirely, so it works even if you never touch
-`ToolRegistry`; but you still need `langchain_community` installed, since the module-level
-`from langchain_community.utilities.sql_database import SQLDatabase` import runs the moment
-you import `agenttune.agentic.tools.builtin.sql` at all. The calculator in the main Quick
-Start has no such dependency.
+`schema(tables)` for inspection. `SQLDatabaseTool` needs `langchain_community` installed
+whether you import it directly (as above) or fetch it with `ToolRegistry.get("sql_database")`:
+the module-level `from langchain_community.utilities.sql_database import SQLDatabase` import
+runs the moment `agenttune.agentic.tools.builtin.sql` is imported. The calculator in the
+main Quick Start has no such dependency.
 
 ## Swapping in other algorithms
 
@@ -847,11 +843,18 @@ def train(
         None, "--reward-funcs",
         help="Comma-separated reward function names from REWARD_REGISTRY.",
     ),
+    tools: Optional[str] = typer.Option(
+        None, "--tools",
+        help="Comma-separated tool names from ToolRegistry.",
+    ),
 ) -> None:
     from agenttune.api import train_agentic
     kwargs = {"model": model, "dataset": dataset, "output_dir": output}
     if reward_funcs:
         # resolve each name against REWARD_REGISTRY, error out on an unknown name
+        ...
+    if tools:
+        # resolve each name with ToolRegistry.get_many(), error out on an unknown name
         ...
     trainer = train_agentic(algorithm, **kwargs)
     trainer.train()
@@ -861,7 +864,7 @@ def train(
 `create_agentic_trainer(algo, **kwargs)`, after validating `algorithm` against the same
 five-value tuple as `AgenticAlgorithm`.
 
-!!! note "The --dataset flag now loads for real, and grpo/rloo are reachable via --reward-funcs"
+!!! note "The --dataset flag now loads for real, grpo/rloo are reachable via --reward-funcs, and tools via --tools"
     The CLI used to pass the dataset string as `train_dataset=` (the pre-loaded-object
     path), so it never went through `DataManager`. It now passes `dataset=` instead, one
     of the same aliases (`dataset_name`/`dataset`) every wrapper's `setup_data()` already
@@ -870,11 +873,15 @@ five-value tuple as `AgenticAlgorithm`.
     `--reward-funcs correctness_reward,structure_reward` resolves each name against
     `REWARD_REGISTRY` (raising a clear error listing every valid name if one doesn't
     match) and passes the result as `reward_funcs=`, satisfying GRPO/RLOO's hard
-    requirement for it. There's still no `--tools` flag; agentic tool-calling training
-    needs real Python callables, which the CLI has no way to name/resolve, so that path is
-    Python-API-only. DPO/BCO's standard offline mode (dataset already has
+    requirement for it. DPO/BCO's standard offline mode (dataset already has
     `chosen`/`rejected` or `completion`/`label` columns) doesn't need `reward_funcs` at
     all and was already reachable once the dataset-loading fix landed.
+
+    `--tools read_file,list_dir` resolves each name through `ToolRegistry` the same way
+    and passes the `BaseTool` instances as `tools=`; the agentic rollout calls them during
+    training. With `dpo`/`bco`, tools switch the trainer to online rollouts, which rank
+    completions with `reward_funcs`, so the CLI requires `--reward-funcs` there too.
+    `run_python`/`run_bash` execute model output on the training host, unsandboxed.
 
 ## Notes & gotchas
 
@@ -909,13 +916,6 @@ Findings from reading the five wrapper files directly, in the same spirit as
   same-layer rename that gets forwarded to `create_rollout_engine(..., base_url=api_base_url)`
   internally. There is no `api_base_url` anywhere on `APIRolloutEngine` or
   `create_rollout_engine` themselves; passing it there lands in an unused `**kwargs` slot.
-
-- **`tools=` fetched through `ToolRegistry` can crash on an unrelated missing dependency.**
-  `ToolRegistry.get(...)` triggers `auto_register_builtins()`, which imports every builtin
-  tool module up front, including the `langchain_community`-dependent ones. Importing a
-  tool class directly (`from agenttune.agentic.tools.builtin.sql import SQLDatabaseTool`)
-  avoids the registry's blanket import, but `sql.py` itself still needs
-  `langchain_community` at module import time regardless of which action you call.
 
 - **`create_agentic_trainer` is TRL-only by design.** `BackendType` has exactly one member
   (`TRL`), and it isn't consulted for branching; there's no `backend=` flag.

@@ -78,6 +78,14 @@ def train(
         "not needed for dpo/bco in standard offline mode (dataset already has "
         "chosen/rejected or completion/label columns).",
     ),
+    tools: str | None = typer.Option(
+        None,
+        "--tools",
+        help="Comma-separated tool names from ToolRegistry (e.g. 'read_file,list_dir'). "
+        "The policy can call these tools during training rollouts. With dpo/bco this "
+        "switches to online rollouts, which also needs --reward-funcs. run_python and "
+        "run_bash execute model output on this machine, unsandboxed.",
+    ),
 ) -> None:
     """Train an agentic RL adapter.
 
@@ -100,6 +108,30 @@ def train(
             raise typer.Exit(2)
         resolved = [REWARD_REGISTRY[n] for n in names]
         kwargs["reward_funcs"] = resolved[0] if len(resolved) == 1 else resolved
+    if tools:
+        from agenttune.agentic.tools import ToolRegistry
+
+        names = list(dict.fromkeys(n.strip() for n in tools.split(",") if n.strip()))
+        if not names:
+            typer.echo("--tools needs at least one tool name.")
+            raise typer.Exit(2)
+        available = ToolRegistry.list_all()
+        unknown = [n for n in names if n not in available]
+        if unknown:
+            typer.echo(f"Unknown tool(s): {unknown}. Available: {sorted(available)}")
+            raise typer.Exit(2)
+        if algorithm.lower() in ("dpo", "bco") and not reward_funcs:
+            # Tools put DPO/BCO in online rollout mode, which ranks rollouts with reward_funcs.
+            typer.echo(f"--tools runs {algorithm} on online rollouts, which needs --reward-funcs.")
+            raise typer.Exit(2)
+        resolved_tools = []
+        for name in names:
+            try:
+                resolved_tools.append(ToolRegistry.get(name))
+            except ImportError as e:
+                typer.echo(f"Could not load tool '{name}': {type(e).__name__}: {e}")
+                raise typer.Exit(1)  # noqa: B904
+        kwargs["tools"] = resolved_tools
 
     try:
         trainer = train_agentic(algorithm, **kwargs)
