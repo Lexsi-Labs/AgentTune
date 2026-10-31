@@ -71,9 +71,9 @@ class MathAccuracyMetric(Metric):
         ]
 
         for pattern in conclusion_patterns:
-            m = re.search(pattern, text, re.IGNORECASE)
-            if m:
-                return m.group(1).replace(",", "")
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                return matches[-1].replace(",", "")
 
         # 5. LaTeX-style answers
         latex_patterns = [
