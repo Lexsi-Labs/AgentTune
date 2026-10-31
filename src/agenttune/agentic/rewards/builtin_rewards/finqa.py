@@ -58,8 +58,8 @@ def _parse_number(token: str) -> float | None:
         t = t[1:-1]
         negative = True
 
-    # Strip leading currency symbols
-    t = t.lstrip("$€£")
+    # Strip leading currency symbols, keeping a sign written before them (-$5)
+    t = re.sub(r"^(-?)[$€£]+", r"\1", t)
 
     # Trailing % kept — we normalise below
     is_percent = t.endswith("%")
@@ -94,10 +94,12 @@ def _extract_numbers(text: str) -> list[float]:
     # Match: optional leading ($, £, €), optional leading -, digits with optional
     # thousand-separator commas and decimal, optional trailing %, K, M, B, T
     # Also match parenthetical negatives: (1,234.5)
-    pattern = r"""
+    # A number ends in a digit ("5, up" is 5) and "th" is an ordinal, not trillions.
+    number = r"\d(?:[\d,]*\d)?\.?\d*(?:[KkMmBb]|[Tt](?![Hh]))?"
+    pattern = rf"""
         (?:
-            \([\$€£]?[\-]?\d[\d,]*\.?\d*[KkMmBbTt]?\)  # (1,234) negative
-          | [\$€£]?[\-]?\d[\d,]*\.?\d*[KkMmBbTt]?%?    # normal number
+            \([\$€£]?[\-]?{number}\)                     # (1,234) negative
+          | (?:(?<!\w)\-[\$€£]|[\$€£]?[\-]?){number}%?   # normal number; $10-$20 has no sign
         )
     """
     tokens = re.findall(pattern, text, re.VERBOSE)
