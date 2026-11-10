@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `agenttune train --tools read_file,list_dir`: comma-separated `ToolRegistry` names,
   passed to the trainer as `tools=`, so agentic tool-calling training runs from the CLI.
+- `result_match_reward(completions, gold_rows=...)` (opt-in, registered): `+2.0` when the last
+  SQL tool result equals the gold query's rows as a multiset, else `-1.0`.
 
 ### Changed
 
@@ -36,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trillions, and `-$5` keeps its sign while `$10-$20` is a range.
 - `pip install agenttune` on Python 3.12 could fail: pip backtracked pandas to the 2.1.0 sdist,
   which does not build. pandas now needs `>=2.2`.
+- SQL `query_reward`: a WHERE clause that names no column (`where 1 = 1`) no longer earns the
+  WHERE bonus, so `select * ... where 1 = 1` plus `*yes*` no longer scores the same as the real
+  query (#11).
+- SQL `query_reward` read rows and errors only from list/dict tool content; rollouts store
+  `str(result)`, so every result counted as "no rows". Text tool output is now parsed.
 
 ## [1.1.0] - 2026-09-28
 

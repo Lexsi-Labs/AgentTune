@@ -3,8 +3,10 @@ Built-in reward functions for agentic GRPO training.
 Add new functions here — they are auto-discovered via REWARD_REGISTRY below.
 """
 
+import ast
 import logging
 import re
+from collections import Counter
 
 from agenttune.agentic.rollout_engines.tool_call_parse import _THINK_BLOCK_RE
 from agenttune.utils.score_logger import log_score
@@ -20,6 +22,44 @@ def _strip_thinking(text: str) -> str:
     Harmony analysis) so only the answer itself is scored. Text without them is
     returned unchanged."""
     return _OPEN_THINK_RE.sub("", _THINK_BLOCK_RE.sub("", text))
+
+
+_SQL_STRING_RE = re.compile(r"'(?:[^']|'')*'")
+_SQL_WORD_RE = re.compile(r"[a-z_][a-z0-9_]*")
+# Where the WHERE clause ends; a subquery's own clauses count as part of it.
+_WHERE_END_RE = re.compile(r"\b(?:group\s+by|order\s+by|having|limit|union|intersect|except)\b|;")
+_WHERE_KEYWORDS = frozenset(
+    "and or not null is in like ilike glob between true false exists select distinct "
+    "case when then else end escape collate".split()
+)
+
+
+def _has_real_where(sql: str) -> bool:
+    """True when the WHERE clause names a column once string literals, numbers and SQL
+    keywords are removed. `where 1 = 1` and `where 'a' = 'a'` filter nothing."""
+    m = re.search(r"\bwhere\b(.*)", sql, re.IGNORECASE | re.DOTALL)
+    if not m:
+        return False
+    clause = _SQL_STRING_RE.sub(" ", m.group(1).lower())
+    end = _WHERE_END_RE.search(clause)
+    if end:
+        clause = clause[: end.start()]
+    # ponytail: a function call (`where abs(1) = 1`) still counts as a column name.
+    return any(w not in _WHERE_KEYWORDS for w in _SQL_WORD_RE.findall(clause))
+
+
+def _tool_output(content):
+    """A tool message's content as a Python value. Rollouts store `str(result)`, so
+    `"[(7, 'Ana')]"` is parsed back to rows and `"{'error': ...}"` to a dict.
+    Returns None for text that is not a literal list, tuple or dict."""
+    if isinstance(content, str):
+        try:
+            content = ast.literal_eval(content.strip())
+        except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+            return None
+    if isinstance(content, tuple):
+        return list(content)
+    return content if isinstance(content, list | dict) else None
 
 
 # ── Individual reward functions ───────────────────────────────────────────────
@@ -103,9 +143,9 @@ def query_reward(completions, answer=None, **kwargs):
             if "limit 1" in q:
                 reward -= 1.0
                 reasons.append(f"query {q!r} uses 'limit 1' -> -1.0")
-            if " where " not in q:
+            if not _has_real_where(q):
                 reward -= 0.5
-                reasons.append(f"query {q!r} has no WHERE clause -> -0.5")
+                reasons.append(f"query {q!r} has no WHERE clause naming a column -> -0.5")
             else:
                 where_count += 1
         if where_count:
@@ -113,7 +153,7 @@ def query_reward(completions, answer=None, **kwargs):
             reward += bonus
             reasons.append(f"{where_count} queries with WHERE (capped at 3) -> +{bonus}")
         combined_results, error_detected = [], False
-        for res in tool_results:
+        for res in map(_tool_output, tool_results):
             if isinstance(res, dict) and "error" in res:
                 error_detected = True
             elif isinstance(res, list):
@@ -139,6 +179,43 @@ def query_reward(completions, answer=None, **kwargs):
                 )
         log_score("sql.query_reward", reward, reasons=reasons, meta={"index": i})
         rewards.append(reward)
+    return rewards
+
+
+def _row_key(row):
+    return tuple(row) if isinstance(row, list | tuple) else (row,)
+
+
+def result_match_reward(completions, gold_rows=None, **kwargs):
+    """Opt-in: +2.0 when the last SQL tool result holds exactly the gold query's rows
+    (order ignored, duplicates counted), else -1.0.
+
+    `gold_rows` is one list of rows per example, e.g. a dataset column TRL passes in.
+    A text check of the query cannot tell `where customer_id > 0` from the real
+    filter; comparing the rows can. Examples without gold rows score 0.0.
+    """
+    rewards = []
+    for i, completion in enumerate(completions):
+        gold = gold_rows[i] if gold_rows is not None and i < len(gold_rows) else None
+        if gold is None:
+            score, reason = 0.0, "no gold_rows for this example -> 0.0"
+        else:
+            results = [
+                turn.get("content")
+                for turn in (completion if isinstance(completion, list) else [])
+                if turn.get("role") == "tool"
+            ]
+            last = _tool_output(results[-1]) if results else None
+            if isinstance(last, list) and Counter(map(_row_key, last)) == Counter(
+                map(_row_key, gold)
+            ):
+                score, reason = 2.0, "last tool result equals the gold rows -> +2.0"
+            elif not results:
+                score, reason = -1.0, "no tool result -> -1.0"
+            else:
+                score, reason = -1.0, "last tool result differs from the gold rows -> -1.0"
+        log_score("sql.result_match_reward", score, reasons=[reason], meta={"index": i})
+        rewards.append(score)
     return rewards
 
 

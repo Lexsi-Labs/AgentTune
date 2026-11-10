@@ -19,6 +19,7 @@ REWARD_REGISTRY: dict[str, Callable] = {
     "correctness_reward": correctness_reward,
     "structure_reward": structure_reward,
     "query_reward": query_reward,
+    "result_match_reward": result_match_reward,
     # Use-case rewards
     "reward_correct_answer": reward_correct_answer,
     "reward_tool_used": reward_tool_used,

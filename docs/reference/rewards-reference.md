@@ -67,7 +67,8 @@ the list form.
 |---|---|---|---|
 | `correctness_reward` | `sql.py` | `(completions, answer=None, **kwargs)` | Parses `*yes*`/`*no*` from the completion; `-0.5` no match, `0.6` matches `answer`, `-1.0` wrong |
 | `structure_reward` | `sql.py` | `(completions, **kwargs)` | Tool-call → tool-response → content shape: `0.1`/`0.05` if well-formed, `-0.15` if a call was made with no response, else `0.0` |
-| `query_reward` | `sql.py` | `(completions, answer=None, **kwargs)` | SQL strategy heuristic: penalizes >3 queries, `LIMIT 1`, missing `WHERE`; rewards a `yes`/`no` `answer` that matches whether any rows were found |
+| `query_reward` | `sql.py` | `(completions, answer=None, **kwargs)` | SQL strategy heuristic: penalizes >3 queries, `LIMIT 1`, and a missing `WHERE` or one that names no column (`where 1 = 1`); rewards a `yes`/`no` `answer` that matches whether any rows were found. Text tool output (`"[(7, 'Ana')]"`) is parsed |
+| `result_match_reward` | `sql.py` | `(completions, gold_rows=None, **kwargs)` | Opt-in. `+2.0` if the last tool result holds exactly the gold query's rows (order ignored, duplicates counted), else `-1.0`; `0.0` for an example without `gold_rows`. Pass `gold_rows` as a dataset column. Catches filters a text check cannot, such as `where customer_id > 0` |
 | `reward_correct_answer` | `sql.py` | `(completions, answer=None, **kwargs)` | Numeric match against `answer` in the final assistant message: `1.5` exact (±1e-3), `0.5` within 1%, else `0.0` |
 | `reward_tool_used` | `sql.py` | `(completions, **kwargs)` | `1.0` if any message has `role: tool`, else `0.0` |
 | `reward_concise_answer` | `sql.py` | `(completions, **kwargs)` | `0.3` if the final assistant message is ≤80 words |
