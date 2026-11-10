@@ -4,6 +4,7 @@ Add new functions here — they are auto-discovered via REWARD_REGISTRY below.
 """
 
 import ast
+import json
 import logging
 import re
 from collections import Counter
@@ -62,6 +63,27 @@ def _tool_output(content):
     return content if isinstance(content, list | dict) else None
 
 
+def _turns(completion, i, kwargs):
+    """The turns of example `i`. Agentic rollouts pass the assistant text as `completions`
+    and the full turn list (tool calls and tool results) as `conversations`; use that
+    when present, else the completion itself."""
+    convos = kwargs.get("conversations")
+    if convos is not None and i < len(convos) and isinstance(convos[i], list):
+        return convos[i]
+    return completion if isinstance(completion, list) else []
+
+
+def _sql_of(call) -> str:
+    """The `sql_command` of a tool call; rollouts store `arguments` as a JSON string."""
+    args = (call.get("function") or {}).get("arguments") or {}
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except ValueError:
+            return ""
+    return str(args.get("sql_command", "")) if isinstance(args, dict) else ""
+
+
 # ── Individual reward functions ───────────────────────────────────────────────
 
 
@@ -95,13 +117,16 @@ def structure_reward(completions, **kwargs):
     rewards = []
     for i, completion in enumerate(completions):
         has_call = has_response = has_other = False
-        for turn in completion if isinstance(completion, list) else []:
+        for turn in _turns(completion, i, kwargs):
             role = turn.get("role")
             if role == "assistant" and turn.get("tool_calls"):
                 has_call = True
             elif role == "tool":
                 has_response = True
-            elif turn.get("content", "").strip() not in ["", "<think>"]:
+            elif role == "assistant" and str(turn.get("content") or "").strip() not in [
+                "",
+                "<think>",
+            ]:
                 has_other = True
         if has_call and has_response:
             score = 0.1 if has_other else 0.05
@@ -128,11 +153,10 @@ def query_reward(completions, answer=None, **kwargs):
         reward = 0.0
         reasons = []
         sql_queries, tool_results = [], []
-        for turn in completion if isinstance(completion, list) else []:
+        for turn in _turns(completion, i, kwargs):
             if turn.get("tool_calls"):
                 for call in turn["tool_calls"]:
-                    sql = call["function"]["arguments"].get("sql_command", "").lower()
-                    sql_queries.append(sql)
+                    sql_queries.append(_sql_of(call).lower())
             if turn.get("role") == "tool" and turn.get("content"):
                 tool_results.append(turn["content"])
         if len(sql_queries) > 3:
@@ -202,7 +226,7 @@ def result_match_reward(completions, gold_rows=None, **kwargs):
         else:
             results = [
                 turn.get("content")
-                for turn in (completion if isinstance(completion, list) else [])
+                for turn in _turns(completion, i, kwargs)
                 if turn.get("role") == "tool"
             ]
             last = _tool_output(results[-1]) if results else None

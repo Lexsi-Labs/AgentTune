@@ -124,3 +124,58 @@ def test_result_match_reward_without_gold_or_tool_result():
 
 def test_result_match_reward_is_registered():
     assert REWARD_REGISTRY["result_match_reward"] is R.result_match_reward
+
+
+def rollout(q, tool_text, final):
+    """The shape agentic GRPO passes: `completions` holds the assistant text only, the
+    turns are in `conversations`, and tool-call `arguments` is a JSON string."""
+    args = '{"sql_command": "' + q.replace('"', '\\"') + '"}'
+    conv = [
+        {"role": "user", "content": "Is there a customer in Peru? Answer *yes* or *no*."},
+        {
+            "role": "assistant",
+            "content": "<tool_call>...</tool_call>",
+            "tool_calls": [
+                {"type": "function", "function": {"name": "sql_database", "arguments": args}}
+            ],
+        },
+        {"role": "tool", "name": "sql_database", "content": tool_text},
+        {"role": "assistant", "content": final},
+    ]
+    completion = [{"role": "assistant", "content": "<tool_call>...</tool_call>" + final}]
+    return completion, conv
+
+
+def rollout_total(q, tool_text, final, ans="yes"):
+    completion, conv = rollout(q, tool_text, final)
+    kw = {"answer": [ans], "conversations": [conv]}
+    return round(
+        sum(
+            f([completion], **kw)[0]
+            for f in (R.correctness_reward, R.query_reward, R.structure_reward)
+        ),
+        2,
+    )
+
+
+def test_rewards_read_rollout_conversations():
+    honest = rollout_total(HONEST, "[(7, 'Ana', 'Peru')]", "*yes*")
+    hack = rollout_total("select * from customers where 1 = 1", "[(1, 'Bo', 'Chile')]", "*yes*")
+    assert honest == pytest.approx(3.1)
+    assert hack == pytest.approx(2.2)
+    completion, conv = rollout(HONEST, "[(7, 'Ana', 'Peru')]", "*yes*")
+    # Without `conversations` the assistant text alone shows no query.
+    assert R.query_reward([completion], answer=["yes"]) == [pytest.approx(-1.5)]
+    assert R.structure_reward([completion], conversations=[conv]) == [0.1]
+
+
+def test_result_match_reward_reads_rollout_conversations():
+    completion, conv = rollout(HONEST, "[(7, 'Ana', 'Peru'), (9, 'Luz', 'Peru')]", "*yes*")
+    assert R.result_match_reward([completion], gold_rows=[GOLD], conversations=[conv]) == [2.0]
+
+
+def test_sql_of_string_and_dict_arguments():
+    assert R._sql_of({"function": {"arguments": '{"sql_command": "select 1"}'}}) == "select 1"
+    assert R._sql_of({"function": {"arguments": {"sql_command": "select 2"}}}) == "select 2"
+    assert R._sql_of({"function": {"arguments": "not json"}}) == ""
+    assert R._sql_of({"function": {}}) == ""
