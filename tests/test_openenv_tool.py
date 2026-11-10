@@ -428,7 +428,6 @@ class TestImportSafety:
         from agenttune.agentic.tools.registry import ToolRegistry
 
         # Reset state to force re-registration
-        ToolRegistry._builtins_registered = False
         ToolRegistry._tools = {}
         ToolRegistry.auto_register_builtins()
 

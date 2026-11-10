@@ -8,10 +8,10 @@ from .base import RolloutEngine
 from .rollout_factory import (
     _ensure_tool_call_arguments_present,
     _keep_tool_results,
-    fallback_chat_template,
-    split_multi_tool_call_turns,
     coerce_tool_call_arguments_to_dict,
+    fallback_chat_template,
     fold_tool_messages_into_user,
+    split_multi_tool_call_turns,
 )
 
 
@@ -256,7 +256,10 @@ class TransformersRolloutEngine(RolloutEngine):
                 for c in conversations
             ],
             [split_multi_tool_call_turns(c) for c in conversations],
-            [coerce_tool_call_arguments_to_dict(split_multi_tool_call_turns(c)) for c in conversations],
+            [
+                coerce_tool_call_arguments_to_dict(split_multi_tool_call_turns(c))
+                for c in conversations
+            ],
         ]
         last_err: Exception | None = None
         silent_drop_fallback: dict | None = None

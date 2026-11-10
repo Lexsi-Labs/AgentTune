@@ -5,39 +5,12 @@ AgentTune ships a small library of `BaseTool` subclasses under
 execute them (`ToolRegistry`, `ToolExecutor`) and to write your own. Every example on this
 page was run against the real source in this repo, not inferred from docstrings.
 
-**Read this first: the one gotcha that affects every tool below:**
-
-!!! warning "`ToolRegistry.get()` can crash on an unrelated missing dependency"
-    Calling `ToolRegistry.get(name)` for **any** tool, including the pure-stdlib
-    `read_file`, triggers `auto_register_builtins()`, which unconditionally imports
-    *every* builtin module at once, including the ones that need `langchain_community`
-    (Slack, GitHub, Playwright, SQL, web search). Without `langchain_community` installed,
-    fetching `read_file` through the registry raises `ImportError` even though
-    `ReadFileTool` itself has no such dependency:
-
-    ```pycon
-    >>> from agenttune.agentic.tools.registry import ToolRegistry
-    >>> ToolRegistry.get("read_file")
-    Traceback (most recent call last):
-      ...
-    ModuleNotFoundError: No module named 'langchain_community'
-    ```
-
-    A base `pip install -e .` (which pulls in `langchain-community` per `pyproject.toml`)
-    does **not** hit this. Confirmed live, `ToolRegistry.get("read_file")` returns cleanly
-    in that install. This only bites in a leaner, partial, or pinned environment where
-    `langchain_community` was left out.
-
-    It even trips on your own custom tools; `register_custom()` doesn't touch
-    `auto_register_builtins()`, but the very next `.get()` call (yours or anyone else's)
-    still does. See [Known Issues](../community/known-issues.md) and the workaround in
-    [Troubleshooting](troubleshooting.md).
-
-    **The reliable workaround, if you only need the zero-dependency tools:** import the
-    tool classes directly from their `builtin/` module instead of going through the
-    registry: `ReadFileTool`, `WriteFileTool`, `ListDirTool`, `RunPythonTool`,
-    `RunBashTool`, and `GrepTool` all import cleanly on their own, with no
-    `langchain_community` in their module-level imports.
+!!! note "Builtins are imported on first fetch"
+    `ToolRegistry.get(name)` imports only the module of the builtin it's asked for. The
+    zero-dependency tools below never import `langchain_community`; the ones that wrap it
+    (Slack, GitHub, Playwright, SQL, web search) raise `ImportError` on fetch if it's
+    missing. It's a base dependency in `pyproject.toml`, so a clean `pip install -e .` has
+    it; see [Troubleshooting](troubleshooting.md) for a partial or pinned install.
 
 ## Zero-dependency tools
 
@@ -141,11 +114,10 @@ untrusted input the same way you would `RunBashTool`'s `command`.
 
 These six wrap `langchain_community` toolkits/utilities. `langchain-community` is listed as
 a base dependency in `pyproject.toml`, but in a lean, partial, or pinned environment it may
-simply not be present, which is exactly the failure mode in the warning above.
+simply not be present; fetching one of the tools that need it then raises `ImportError`.
 `HttpGetTool`/`HttpPostTool` only need
 `requests` (already a transitive dependency of almost everything else here), not
-`langchain_community` itself, but they still get imported by
-`auto_register_builtins()` alongside the tools that do.
+`langchain_community` itself, so they load either way.
 
 ### `HttpGetTool` / `HttpPostTool`
 
@@ -550,15 +522,10 @@ tool = ToolRegistry.get("uppercase")             # KeyError if not found
 names = ToolRegistry.list_all()                  # (list_tools() is an alias)
 ```
 
-`register_custom()` just does `cls._tools[tool.name] = tool`; it doesn't touch
-`auto_register_builtins()`. But the very next `.get()` call, yours or anyone else's in the
-same process, checks `cls._builtins_registered` and, if it's still `False`, imports every
-builtin module before looking your tool up. This is the same failure mode as the warning at
-the top of this page, just reached via a different path: **registering your own tool does
-not protect you from the `langchain_community` ImportError on the first `.get()` call.** See
-[Troubleshooting](troubleshooting.md) for the workaround (setting
-`ToolRegistry._builtins_registered = True` yourself before the first `.get()`, if you don't
-need the langchain-backed builtins).
+`register_custom()` just does `cls._tools[tool.name] = tool`. A tool registered under a
+builtin's name (say, a sandboxed `run_bash`) replaces that builtin: `get()` only loads a
+builtin when nothing is registered under its name, and `auto_register_builtins()` skips
+names that are already taken.
 
 `ToolExecutor` (`agenttune.agentic.tools.executor`) wraps registry lookup + execution with a
 timeout, and normalizes both sync and async `execute()` methods:
@@ -582,8 +549,8 @@ automatically. Write your custom tool's `execute()` as either a plain function o
 
 ## Other tool-adjacent modules
 
-Two more files under `builtin/` are worth knowing about even though they aren't registered
-in `auto_register_builtins()`:
+Two more files under `builtin/` are worth knowing about even though they aren't registry
+builtins (`ToolRegistry.get()` won't find them):
 
 - **`FileIngestionTool`** (`builtin/file_ingestion.py`): generates synthetic directories of
   small CSV/TXT/LOG files for training file-reading agents, sized so a full

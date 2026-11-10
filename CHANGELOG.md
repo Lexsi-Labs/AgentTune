@@ -5,6 +5,49 @@ All notable changes to AgentTune will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `agenttune train --tools read_file,list_dir`: comma-separated `ToolRegistry` names,
+  passed to the trainer as `tools=`, so agentic tool-calling training runs from the CLI.
+- `result_match_reward(completions, gold_rows=...)` (opt-in, registered): `+2.0` when the last
+  SQL tool result equals the gold query's rows as a multiset, else `-1.0`.
+
+### Changed
+
+- `ToolRegistry.auto_register_builtins()` skips names that are already registered instead of
+  overwriting them, and `get()` no longer calls it.
+
+### Fixed
+
+- `ToolRegistry.get(name)` imports only the requested builtin's module; fetching
+  `read_file` no longer raises `ImportError` when `langchain_community` isn't installed.
+- A tool registered with `register_custom()` under a builtin's name (e.g. a sandboxed
+  `run_bash`) was replaced by the builtin on the first `get()`; it now takes precedence.
+- `ToolRegistry.list_all()` returned `[]` until the first `get()`; it now includes builtins.
+- LLM judge: a non-finite score (`NaN`, `inf`) parses as 0.0 instead of 1.0
+  (`min(1.0, nan)` is 1.0).
+- `MathAccuracyMetric`: a lone fraction (`3/4`, `\frac{3}{4}`, `\dfrac`, `\tfrac`) is compared by
+  value, and `\boxed{...}` content may hold nested braces.
+- `MathAccuracyMetric`: with several conclusion sentences ("So ... Therefore ..."), the last one
+  gives the answer, not the first.
+- SQL `reward_correct_answer` and `numerical_match_reward` read thousands separators: `1,234` is
+  1234, not 1.
+- FinQA number extraction: a number ends in a digit (`5, up` is 5), `th` is an ordinal rather than
+  trillions, and `-$5` keeps its sign while `$10-$20` is a range.
+- `pip install agenttune` on Python 3.12/3.13 could fail: pip backtracked pandas to an sdist (2.1.0),
+  which does not build (2.2.2 on Python 3.13). pandas now needs `>=2.2.3`.
+- SQL `query_reward`: a WHERE clause that names no column (`where 1 = 1`) no longer earns the
+  WHERE bonus, so `select * ... where 1 = 1` plus `*yes*` no longer scores the same as the real
+  query (#11).
+- SQL `query_reward` read rows and errors only from list/dict tool content; rollouts store
+  `str(result)`, so every result counted as "no rows". Text tool output is now parsed.
+- SQL `query_reward`, `structure_reward` and `result_match_reward` read the turns from the
+  `conversations` the agentic trainers pass, and parse JSON-string tool-call `arguments`. They read
+  only `completions`, which holds the assistant text, so in training they never saw a query or a
+  tool result (`query_reward` was always -1.5, `structure_reward` always 0.0).
+
 ## [1.1.0] - 2026-09-28
 
 ### Added

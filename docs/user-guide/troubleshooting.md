@@ -5,75 +5,28 @@ generic FAQ template. Each entry is Problem → Cause → Fix. If you hit someth
 here, check [Known Issues](../community/known-issues.md) first; it's the fuller audit this
 page draws from.
 
-## `ImportError`/`ModuleNotFoundError: No module named 'langchain_community'` from a tool that doesn't need it
+## `ImportError`/`ModuleNotFoundError: No module named 'langchain_community'` from `ToolRegistry.get()`
 
-**Problem**: You call `ToolRegistry.get("read_file")` (or any other tool name, including one
-you just registered yourself) and get a `ModuleNotFoundError` for `langchain_community`,
-even though the tool you asked for has nothing to do with LangChain.
+**Problem**: `ToolRegistry.get("slack")` (or `"github"`, `"playwright_browser"`,
+`"sql_database"`, `"web_search"`) raises `ModuleNotFoundError` for `langchain_community`.
 
 ```pycon
 >>> from agenttune.agentic.tools.registry import ToolRegistry
->>> ToolRegistry.get("read_file")
+>>> ToolRegistry.get("slack")
 Traceback (most recent call last):
   ...
 ModuleNotFoundError: No module named 'langchain_community'
 ```
 
-**Cause**: `ToolRegistry.get()` calls `auto_register_builtins()` exactly once per process,
-the first time *any* tool is fetched (`registry.py`):
+**Cause**: those five builtins wrap `langchain_community` toolkits and import them at module
+level. `ToolRegistry.get(name)` imports a builtin's module the first time that name is
+fetched, so the import error surfaces there. Fetching any other tool, including the
+zero-dependency ones (`read_file`/`write_file`/`list_dir`/`run_python`/`run_bash`/`grep`)
+and tools you registered with `register_custom()`, never imports `langchain_community`.
 
-```python
-@classmethod
-def get(cls, name: str) -> BaseTool:
-    if not cls._builtins_registered:
-        cls.auto_register_builtins()
-    ...
-```
-
-`auto_register_builtins()` unconditionally imports **every** builtin module, including
-`slack.py`, `github.py`, `playright.py`, and `sql.py`, all of which do
-`from langchain_community... import ...` at module level. If `langchain_community` isn't
-installed, that import raises before your requested tool is ever looked up, regardless of
-which tool you asked for. This also means `register_custom()` doesn't save you: it doesn't
-touch `_builtins_registered`, so the very next `.get()` call (yours or anyone else's in the
-same process) still tries to import everything first.
-
-**Fix**: two options, depending on what you need.
-
-1. **Install `langchain_community`** if you actually want the tools that need it (Slack,
-   GitHub, Playwright, SQL, web search). It's a base dependency in `pyproject.toml`, so
-   `pip install -e .` from a clean checkout should already include it; this failure mode
-   shows up when it's missing from a partial or pinned install rather than a clean
-   `pip install -e .`.
-
-2. **Skip the registry entirely** for the zero-dependency tools; import the classes
-   directly from their `builtin/` module. This is the reliable fix if you only need
-   `read_file`/`write_file`/`list_dir`/`run_python`/`run_bash`/`grep`:
-
-   ```python
-   from agenttune.agentic.tools.builtin.file_tools import ReadFileTool
-   tool = ReadFileTool()
-   result = tool.execute(path="README.md")
-   ```
-
-3. **If you need the registry specifically** (e.g. for `ToolExecutor`, which takes a
-   registry object) but want to avoid pulling in the langchain-backed builtins, register
-   your own tools and set the "already registered" flag yourself before the first `.get()`:
-
-   ```python
-   from agenttune.agentic.tools.registry import ToolRegistry
-   from my_tools import MyTool
-
-   ToolRegistry.register_custom(MyTool())
-   ToolRegistry._builtins_registered = True   # skip auto_register_builtins() entirely
-   tool = ToolRegistry.get("my_tool")          # works — no langchain_community needed
-   ```
-
-   This is reaching into a private attribute, not a supported public API, but it's the
-   only lever the current code exposes, and it's verified to work (confirmed against the
-   actual `registry.py`). It also means none of the builtin tools (including the
-   zero-dependency ones) will be registered; register those explicitly too if you need
-   them alongside your own.
+**Fix**: install it. `langchain-community` is a base dependency in `pyproject.toml`, so
+`pip install -e .` from a clean checkout includes it; this failure shows up when it's
+missing from a partial or pinned install.
 
 See [Tool Library](tool-library.md) and [Known Issues](../community/known-issues.md) for
 the full tool-by-tool dependency breakdown.

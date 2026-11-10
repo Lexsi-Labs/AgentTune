@@ -48,6 +48,8 @@ agenttune train --algorithm grpo --model Qwen/Qwen2.5-1.5B-Instruct --dataset my
 | `--model` | *required* | Base model name or path. |
 | `--dataset` | *required* | Training dataset: HF dataset id or local path. |
 | `--output` | `./agenttune-run` | Output directory for the trained adapter. |
+| `--reward-funcs` | none | Comma-separated reward function names from `REWARD_REGISTRY`. Required for `grpo`/`rloo`, and for `dpo`/`bco` with `--tools`; not needed for `dpo`/`bco` offline (dataset already has `chosen`/`rejected` or `completion`/`label` columns). |
+| `--tools` | none | Comma-separated tool names from `ToolRegistry` (e.g. `read_file,list_dir`), passed to the trainer as `tools=`. Makes `dpo`/`bco` train on online rollouts, which needs `--reward-funcs`. `run_python`/`run_bash` execute model output on the training host, unsandboxed. |
 
 Agentic training needs a GPU and a compatible `trl`/`torch` stack; the command validates
 arguments and constructs the trainer immediately, but the run itself only executes in a

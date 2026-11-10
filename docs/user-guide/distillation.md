@@ -213,18 +213,6 @@ logs = teacher.collect_rollout(
 )
 ```
 
-!!! warning "`ToolRegistry.get()` can crash on an unrelated missing dependency"
-    The first call to `ToolRegistry.get(...)` triggers `auto_register_builtins()`, which
-    unconditionally imports **every** builtin tool module at once, including the
-    `langchain_community`-backed ones (Slack/GitHub/Playwright/SQL/web-search). Without
-    `langchain_community` installed, even fetching the pure-stdlib `read_file` tool raises
-    `ImportError`. See
-    [Known Issues](../community/known-issues.md#looks-like-it-works-doesnt-or-gives-a-quietly-wrong-answer)
-    for the exact mechanism. Install `langchain_community`, or sidestep the registry
-    entirely and hand `collect_rollout(tools=...)` your own `BaseTool` subclass instances,
-    anything with `.name` and `.to_schema()` (see `agenttune.agentic.tools.base.BaseTool`)
-    works, registry or not.
-
 The resulting `EventLog`s now contain real `TOOL_CALL`/`TOOL_RESULT` event pairs from the
 teacher's actual tool use, which `as_dataset_rows()` (next section) turns into
 `<tool_call>{...}</tool_call>` training targets: the student is being taught the
@@ -565,5 +553,4 @@ changed, not just that a loss number went down.
   `Project`, and the rest of the spine's vocabulary.
 - [Python API: Agentic Spine](agentic-spine.md): the standalone
   API-level reference for `Project` and everything it wraps.
-- [Known Issues](../community/known-issues.md): the tool-registry import crash and
-  other gaps worth knowing about.
+- [Known Issues](../community/known-issues.md): gaps worth knowing about.

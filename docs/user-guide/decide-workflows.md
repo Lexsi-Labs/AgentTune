@@ -407,11 +407,8 @@ file:
 ```
 
 `tool_call` delegates to the exact same tool registry the agentic spine uses
-(`agenttune.agentic.tools`): same `ToolRegistry`/`ToolExecutor`, same
-[known caveat](../community/known-issues.md#looks-like-it-works-doesnt-or-gives-a-quietly-wrong-answer)
-about `auto_register_builtins()` importing every builtin (including the
-`langchain_community`-dependent ones) on first use. From the stage's own docstring, a real
-schema:
+(`agenttune.agentic.tools`): same `ToolRegistry`/`ToolExecutor`. From the stage's own
+docstring, a real schema:
 
 ```yaml
 - id: lookup_customer

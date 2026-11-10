@@ -6,6 +6,11 @@ import re
 
 from .base import Metric
 
+_NUMBER = r"[+-]?\d+(?:\.\d+)?"
+_FRACTION = re.compile(
+    rf"([+-]?)(?:\\[dt]?frac\{{({_NUMBER})\}}\{{({_NUMBER})\}}|({_NUMBER})/({_NUMBER}))"
+)
+
 
 class MathAccuracyMetric(Metric):
     """
@@ -14,6 +19,29 @@ class MathAccuracyMetric(Metric):
 
     def __init__(self):
         super().__init__("math_accuracy")
+
+    def _number_in(self, text: str) -> str:
+        r"""Value of `text` if it is a lone fraction, else its last number, else ""."""
+        m = _FRACTION.fullmatch(re.sub(r"\\text\{[^{}]*\}|\s", "", text))
+        if m:
+            numerator, denominator = (float(part) for part in m.groups()[1:] if part)
+            if denominator:
+                value = numerator / denominator
+                return str(-value if m.group(1) == "-" else value)
+        nums = re.findall(r"[+-]?\d+(?:,\d{3})*(?:\.\d+)?", text)
+        return nums[-1].replace(",", "") if nums else ""
+
+    def _boxed_content(self, text: str) -> str:
+        r"""Content of the first \boxed{...}, which may hold nested braces."""
+        start = text.find("\\boxed{") + len("\\boxed{")
+        if start < len("\\boxed{"):
+            return ""
+        depth = 1
+        for i, char in enumerate(text[start:], start):
+            depth += (char == "{") - (char == "}")
+            if depth == 0:
+                return text[start:i]
+        return ""
 
     def _extract_answer(self, text: str) -> str:
         r"""
@@ -43,20 +71,15 @@ class MathAccuracyMetric(Metric):
         # 2. <SOLUTION> tags (Llama format)
         m = re.search(r"<SOLUTION>\s*(.+?)(?:</SOLUTION>|$)", text, re.DOTALL | re.IGNORECASE)
         if m:
-            solution_text = m.group(1).strip()
             # Extract only numbers from solution text
-            nums = re.findall(r"[+-]?\d+(?:,\d{3})*(?:\.\d+)?", solution_text)
-            if nums:
-                return nums[-1].replace(",", "")
+            solution_number = self._number_in(m.group(1).strip())
+            if solution_number:
+                return solution_number
 
         # 3. Boxed format (common in MATH dataset)
-        if "\\boxed" in text:
-            m = re.search(r"\\boxed\{([^}]+)\}", text)
-            if m:
-                boxed_content = m.group(1)
-                nums = re.findall(r"[+-]?\d+(?:,\d{3})*(?:\.\d+)?", boxed_content)
-                if nums:
-                    return nums[-1].replace(",", "")
+        boxed_number = self._number_in(self._boxed_content(text))
+        if boxed_number:
+            return boxed_number
 
         # 4. Natural language conclusions (Qwen-style)
         conclusion_patterns = [
@@ -71,9 +94,9 @@ class MathAccuracyMetric(Metric):
         ]
 
         for pattern in conclusion_patterns:
-            m = re.search(pattern, text, re.IGNORECASE)
-            if m:
-                return m.group(1).replace(",", "")
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                return matches[-1].replace(",", "")
 
         # 5. LaTeX-style answers
         latex_patterns = [
@@ -100,10 +123,9 @@ class MathAccuracyMetric(Metric):
         # 7. Last sentence fallback (for natural language models)
         sentences = re.split(r"[.!?]\s+", text)
         if sentences:
-            last_sentence = sentences[-1]
-            nums = re.findall(r"[+-]?\d+(?:,\d{3})*(?:\.\d+)?", last_sentence)
-            if nums:
-                return nums[-1].replace(",", "")
+            last_number = self._number_in(sentences[-1])
+            if last_number:
+                return last_number
 
         # 8. Final fallback: last number anywhere in text
         nums = re.findall(r"[+-]?\d+(?:,\d{3})*(?:\.\d+)?", text)

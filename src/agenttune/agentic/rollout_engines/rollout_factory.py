@@ -326,9 +326,16 @@ def split_multi_tool_call_turns(conversation: list[dict]) -> list[dict]:
             results.append(conversation[j])
             j += 1
         by_id = {r.get("tool_call_id"): r for r in results if r.get("tool_call_id")}
-        unmatched = [r for r in results if not r.get("tool_call_id") or r.get("tool_call_id") not in {c.get("id") for c in calls}]
+        unmatched = [
+            r
+            for r in results
+            if not r.get("tool_call_id")
+            or r.get("tool_call_id") not in {c.get("id") for c in calls}
+        ]
         for k, call in enumerate(calls):
-            out.append({**msg, "tool_calls": [call], "content": msg.get("content") if k == 0 else ""})
+            out.append(
+                {**msg, "tool_calls": [call], "content": msg.get("content") if k == 0 else ""}
+            )
             res = by_id.get(call.get("id")) if call.get("id") else None
             if res is None and unmatched:
                 res = unmatched.pop(0)  # no ids: pair results with calls in order
@@ -2826,4 +2833,3 @@ def create_dpo_rollout_fn(
         }
 
     return dpo_rollout_fn
-

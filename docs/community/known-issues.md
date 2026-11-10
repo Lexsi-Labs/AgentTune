@@ -7,11 +7,10 @@ much each should worry you.
 
 ## Looks like it works, doesn't, or gives a quietly wrong answer
 
-- **Fetching *any* tool can crash on an unrelated missing dependency.**
-  `ToolRegistry.get("read_file")` triggers `auto_register_builtins()`, which unconditionally
-  imports every builtin tool module at once, including the `langchain_community`-dependent
-  ones (Slack/GitHub/Playwright/SQL/web-search). Without `langchain_community` installed,
-  even fetching the pure-stdlib `read_file` tool raises `ImportError`.
+- **~~Fetching *any* tool can crash on an unrelated missing dependency~~ Fixed.**
+  `ToolRegistry.get(name)` now imports only the module of the builtin it's asked for, so
+  fetching the pure-stdlib `read_file` no longer imports `langchain_community`; only the
+  tools that wrap it (Slack/GitHub/Playwright/SQL/web-search) need it installed.
 - **`DistilledJudge` silently returns an all-zero reward** if `transformers` isn't installed
   or its checkpoint fails to load; logged as a warning, not raised as an error.
 - **`RougeMetric`/`BleuMetric` silently return `0.0`** if `rouge_score`/`nltk` aren't
@@ -28,15 +27,16 @@ much each should worry you.
   always return an empty list against a real log. **`CollectRunner` is the working
   alternative**: it builds DPO/BCO training records directly from in-memory
   `PipelineState` during a real run, not by re-parsing the audit log afterward.
-- **~~`agenttune train` cannot currently succeed~~ Partially fixed.** Its `--dataset` flag
+- **~~`agenttune train` cannot currently succeed~~ Fixed.** Its `--dataset` flag
   used to land in `train_dataset` (the pre-loaded-dataset path) instead of the alias
   `dataset` that routes through `DataManager`'s HF-dataset-id loading path; fixed, a
   dataset id passed via the CLI now actually loads. A new `--reward-funcs` flag (names
   from `REWARD_REGISTRY`, comma-separated) makes `grpo`/`rloo` runnable via the CLI too.
-  Still no `--tools` flag; agentic tool-calling training isn't reachable from the CLI,
-  only the Python API. See [User Guide: RL Training](../user-guide/rl-training.md).
+  A `--tools` flag (names from `ToolRegistry`, comma-separated) makes agentic
+  tool-calling training reachable from the CLI as well. See
+  [User Guide: RL Training](../user-guide/rl-training.md).
 - **A registry-fetched `SQLDatabaseTool()` has no database configured.**
-  `ToolRegistry.auto_register_builtins()` instantiates it with no `db_uri`, but
+  `ToolRegistry` instantiates it with no `db_uri`, but
   `.execute()` handles this cleanly, returning `ToolResult(success=False, error="No db_uri
   set. Pass it at construction: SQLDatabaseTool('sqlite:///mydb.db')")` rather than
   crashing. Still, you'll want to construct `SQLDatabaseTool(db_uri=...)` yourself rather

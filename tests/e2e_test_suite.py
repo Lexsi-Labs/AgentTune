@@ -800,7 +800,6 @@ def t12_artefact_audit():
 def t13_registry_regression():
     from agenttune.agentic.tools.registry import ToolRegistry
 
-    ToolRegistry._builtins_registered = False
     ToolRegistry._tools = {}
     ToolRegistry.auto_register_builtins()
 
