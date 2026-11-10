@@ -115,9 +115,9 @@ dependencies = [
     "langchain-community",
     
     # Data processing
-    # pandas < 2.1.1 has no Python 3.12 wheels; without this floor pip can backtrack to
-    # an sdist (2.1.0) that fails to build, and the install fails.
-    "pandas>=2.2",
+    # pandas < 2.2.3 lacks Python 3.12/3.13 wheels; without this floor pip can backtrack to
+    # an sdist (2.1.0, 2.2.2) that fails to build, and the install fails.
+    "pandas>=2.2.3",
     "scikit-learn>=1.0.0",
     
     # Utilities

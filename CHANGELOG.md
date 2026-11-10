@@ -36,13 +36,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1234, not 1.
 - FinQA number extraction: a number ends in a digit (`5, up` is 5), `th` is an ordinal rather than
   trillions, and `-$5` keeps its sign while `$10-$20` is a range.
-- `pip install agenttune` on Python 3.12 could fail: pip backtracked pandas to the 2.1.0 sdist,
-  which does not build. pandas now needs `>=2.2`.
+- `pip install agenttune` on Python 3.12/3.13 could fail: pip backtracked pandas to an sdist (2.1.0),
+  which does not build (2.2.2 on Python 3.13). pandas now needs `>=2.2.3`.
 - SQL `query_reward`: a WHERE clause that names no column (`where 1 = 1`) no longer earns the
   WHERE bonus, so `select * ... where 1 = 1` plus `*yes*` no longer scores the same as the real
   query (#11).
 - SQL `query_reward` read rows and errors only from list/dict tool content; rollouts store
   `str(result)`, so every result counted as "no rows". Text tool output is now parsed.
+- SQL `query_reward`, `structure_reward` and `result_match_reward` read the turns from the
+  `conversations` the agentic trainers pass, and parse JSON-string tool-call `arguments`. They read
+  only `completions`, which holds the assistant text, so in training they never saw a query or a
+  tool result (`query_reward` was always -1.5, `structure_reward` always 0.0).
 
 ## [1.1.0] - 2026-09-28
 
