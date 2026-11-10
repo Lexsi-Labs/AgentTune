@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1234, not 1.
 - FinQA number extraction: a number ends in a digit (`5, up` is 5), `th` is an ordinal rather than
   trillions, and `-$5` keeps its sign while `$10-$20` is a range.
+- `pip install agenttune` on Python 3.12 could fail: pip backtracked pandas to the 2.1.0 sdist,
+  which does not build. pandas now needs `>=2.2`.
 
 ## [1.1.0] - 2026-09-28
 
