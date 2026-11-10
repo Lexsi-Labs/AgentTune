@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -144,6 +145,12 @@ def _strip_fences(text: str) -> str:
     return text
 
 
+def _clamp_score(value: Any) -> float:
+    """Clamp a judge score to [0, 1]. A non-finite score is 0.0: `min(1.0, nan)` is 1.0."""
+    score = float(value)
+    return max(0.0, min(1.0, score)) if math.isfinite(score) else 0.0
+
+
 def _parse_absolute(text: str) -> JudgeScore:
     text = _strip_fences(text)
     try:
@@ -151,7 +158,7 @@ def _parse_absolute(text: str) -> JudgeScore:
         if not isinstance(obj, dict) or "score" not in obj:
             raise ValueError("missing score")
         return JudgeScore(
-            score=max(0.0, min(1.0, float(obj["score"]))),
+            score=_clamp_score(obj["score"]),
             explanation=str(obj.get("explanation", "")),
             raw_response=text,
         )
@@ -178,7 +185,7 @@ def _parse_relative(text: str, n: int) -> list[JudgeScore]:
             raise ValueError
         result = [
             JudgeScore(
-                score=max(0.0, min(1.0, float(e["score"]))),
+                score=_clamp_score(e["score"]),
                 explanation=str(e.get("explanation", "")),
                 trajectory_id=str(e.get("id", "")),
                 raw_response=text,
