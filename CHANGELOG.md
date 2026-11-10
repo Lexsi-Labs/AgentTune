@@ -24,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A tool registered with `register_custom()` under a builtin's name (e.g. a sandboxed
   `run_bash`) was replaced by the builtin on the first `get()`; it now takes precedence.
 - `ToolRegistry.list_all()` returned `[]` until the first `get()`; it now includes builtins.
+- LLM judge: a non-finite score (`NaN`, `inf`) parses as 0.0 instead of 1.0
+  (`min(1.0, nan)` is 1.0).
+- `MathAccuracyMetric`: a lone fraction (`3/4`, `\frac{3}{4}`, `\dfrac`, `\tfrac`) is compared by
+  value, and `\boxed{...}` content may hold nested braces.
+- `MathAccuracyMetric`: with several conclusion sentences ("So ... Therefore ..."), the last one
+  gives the answer, not the first.
+- SQL `reward_correct_answer` and `numerical_match_reward` read thousands separators: `1,234` is
+  1234, not 1.
+- FinQA number extraction: a number ends in a digit (`5, up` is 5), `th` is an ordinal rather than
+  trillions, and `-$5` keeps its sign while `$10-$20` is a range.
 
 ## [1.1.0] - 2026-09-28
 
