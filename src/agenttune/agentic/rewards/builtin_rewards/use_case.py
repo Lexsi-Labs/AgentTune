@@ -286,15 +286,15 @@ def numerical_match_reward(prompts, completions, answer=None, **kwargs):
         match = re.search(r"<answer>(.*?)</answer>", text, re.IGNORECASE | re.DOTALL)
         pred = match.group(1).strip() if match else text.strip()
 
-        gold_nums = re.findall(r"-?\d+\.?\d*", str(gold))
-        pred_nums = re.findall(r"-?\d+\.?\d*", pred)
+        gold_nums = re.findall(r"-?\d+(?:,\d{3})*\.?\d*", str(gold))
+        pred_nums = re.findall(r"-?\d+(?:,\d{3})*\.?\d*", pred)
 
         if not gold_nums:
             score = 0.0
             reason = "gold contains no numeric value to compare against -> 0.0"
         else:
-            gold_val = float(gold_nums[0])
-            pred_val = float(pred_nums[0]) if pred_nums else None
+            gold_val = float(gold_nums[0].replace(",", ""))
+            pred_val = float(pred_nums[0].replace(",", "")) if pred_nums else None
 
             if pred_val is None:
                 score = 0.0

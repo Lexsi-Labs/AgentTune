@@ -156,7 +156,7 @@ def reward_correct_answer(completions, answer=None, **kwargs):
             final_text = str(comp)
         # A number the model only mentions while reasoning is not its answer.
         final_text = _strip_thinking(final_text)
-        numbers = re.findall(r"-?\d+\.?\d*", final_text)
+        numbers = re.findall(r"-?\d+(?:,\d{3})*\.?\d*", final_text)
         try:
             gt_val = float(gt)
         except (ValueError, TypeError):
@@ -174,7 +174,7 @@ def reward_correct_answer(completions, answer=None, **kwargs):
         reason = f"no number within tolerance of gold {gt_val} found in completion -> 0.0"
         for n in numbers:
             try:
-                pred = float(n)
+                pred = float(n.replace(",", ""))
                 if abs(pred - gt_val) < 1e-3:
                     score = 1.5
                     reason = f"predicted {pred} matches gold {gt_val} exactly -> 1.5"
