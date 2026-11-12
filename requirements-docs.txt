@@ -12,12 +12,12 @@ mkdocs-material>=9.5,<10
 
 # Markdown extensions (used by mkdocs-material; also provides the mermaid fence and
 # --8<-- snippet includes used across docs/reference/ and docs/community/)
-pymdown-extensions>=10,<11
+pymdown-extensions>=10,<14
 
 # Code highlighting
-pygments>=2.15.0
+pygments>=2.21.0
 
 # Jupyter notebook support (for re-executing the notebooks under docs/notebooks/ locally;
 # not used by the mkdocs build itself)
-jupyter>=1.0.0
-ipykernel>=6.25.0
+jupyter>=1.1.1
+ipykernel>=7.4.0

@@ -80,7 +80,7 @@ dependencies = [
     # Core ML dependencies
     # Pinned to 2.11.0, the version the optional `[vllm]` extra resolves with (vllm 0.22.1
     # on Linux). The base install has no vLLM and also resolves on macOS.
-    "torch==2.11.0",
+    "torch==2.15.0",
     # cohere_compass (North Micro Vision) imports torchvision.
     "torchvision",
     # 5.15 is the floor for cohere_compass; 5.17 is verified with the Cohere/Aya archs
@@ -91,8 +91,8 @@ dependencies = [
     "peft>=0.6.0",
     # peft 0.19+ calls is_torchao_available() on trainer.train() and raises if
     # torchao is installed below 0.16. Colab GPU ships torchao==0.10.0.
-    # 0.17 is the torch==2.11.0 matching release (ABI-stable from 0.17 onward).
-    "torchao>=0.17.0,<0.18",
+    # 0.17 is the torch==2.15.0 matching release (ABI-stable from 0.17 onward).
+    "torchao>=0.17.0,<0.19",
     "bitsandbytes>=0.41.0",
     # w4a16/compressed-tensors checkpoints (Cohere North Mini Code, Gemma 4
     # QAT) and gpt-oss's mxfp4 quantizer both need this.
@@ -129,7 +129,7 @@ dependencies = [
     # vLLM is optional (`pip install 'agenttune[vllm]'`): it has no macOS wheels.
     # Plain trl, not trl[vllm]: GRPO/RLOO import VLLMGeneration, and a CUDA-13 vLLM
     # wheel crashes Colab (`libcudart.so.13`).
-    "trl==1.7.1",
+    "trl==1.17.1",
 
     # Agentic graph spine — `agenttune.decide.graph_runner.GraphRunner` imports
     # `langgraph.graph.StateGraph` at module top level, and that module is pulled
@@ -157,7 +157,7 @@ dependencies = [
     # Colab GPU ships a complete pillow==11.3.0 (pip-freeze.gpu.txt). 12.0.0
     # dropped PIL._typing._Ink; requiring 12.1.1+ makes uv overlay 12.x Python
     # onto that 11.3 _imaging binary. Stay on 11.x so the pair stays matched.
-    "pillow>=11.3.0,<12",
+    "pillow>=11.3.0,<14",
 
     # Evaluation metrics
     "evaluate>=0.4.0",
@@ -176,7 +176,7 @@ dependencies = [
     "python-docx>=1.0.0",
     "python-pptx>=0.6.23",
     # 0.11.10 requires Pillow>=12.2.0, which would overlay 12.x on Colab's 11.3.
-    "pdfplumber>=0.10.0,<0.11.10",
+    "pdfplumber>=0.10.0,<0.11.11",
     "pyarrow>=14.0.0",
     "networkx>=3.0",
     "groq>=0.9.0",
@@ -204,11 +204,11 @@ flash-attn = [
 ]
 
 # Optional: vLLM generation (`use_vllm=True`, the vllm rollout engine / judge / eval
-# backends). Linux + CUDA only. trl[vllm]==1.7.1 allows vllm>=0.14,<=0.23; with torch==2.11.0
+# backends). Linux + CUDA only. trl[vllm]==1.17.1 allows vllm>=0.14,<=0.23; with torch==2.15.0
 # it resolves to vllm 0.22.1.
 # Enables: pip install 'agenttune[vllm]'
 vllm = [
-    "trl[vllm]==1.7.1",
+    "trl[vllm]==1.17.1",
 ]
 
 # Optional: contributor tooling (test runners, linters, formatters, git hooks). Matches the
@@ -245,7 +245,7 @@ service = [
 docs = [
     "mkdocs>=1.6,<2",
     "mkdocs-material>=9.5,<10",
-    "pymdown-extensions>=10,<11",
+    "pymdown-extensions>=10,<14",
 ]
 
 [project.urls]
