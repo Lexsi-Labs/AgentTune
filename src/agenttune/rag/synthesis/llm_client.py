@@ -18,6 +18,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 from .schema import LLMCallRecord
 
@@ -234,7 +235,10 @@ class OpenAICompatLLMClient:
         # medium→high, high→high, max→max) so thinking is bounded while still
         # enabled for quality. Default "low" — measured 4x fewer completion
         # tokens with content intact.
-        is_deepseek = "deepseek" in model.lower() or "deepseek.com" in (base_url or "")
+        host = (urlparse(base_url or "").hostname or "").lower()
+        is_deepseek = (
+            "deepseek" in model.lower() or host == "deepseek.com" or host.endswith(".deepseek.com")
+        )
         self._is_deepseek = is_deepseek
         # Build the base extra_body: Qwen3 sampling params + thinking control.
         # These match the official Qwen3 serving recipe (top_k=20, top_p=0.8,

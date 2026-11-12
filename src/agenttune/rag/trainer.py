@@ -21,6 +21,7 @@ through to ``create_agentic_trainer`` — no script, no manual tool/reward wirin
 
 from __future__ import annotations
 
+import os
 import tempfile
 from typing import Any
 
@@ -45,7 +46,10 @@ _COLUMN_ALIASES = {"question": "prompt", "query": "prompt", "gold_answer": "answ
 
 def _build_backend(retrieval_type: str, db_path: str | None, match_all: bool) -> SearchBackend:
     if retrieval_type == "sqlite_fts":
-        path = db_path or tempfile.mktemp(suffix=".sqlite", prefix="agenttune_rag_")
+        path = db_path
+        if not path:
+            fd, path = tempfile.mkstemp(suffix=".sqlite", prefix="agenttune_rag_")
+            os.close(fd)
         return SQLiteFTSBackend(path, match_all=match_all)
     if retrieval_type == "chroma":
         from .retrieval.chroma_backend import ChromaBackend
