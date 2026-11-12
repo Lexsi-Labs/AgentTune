@@ -1025,10 +1025,17 @@ _DEEPSEEK_CALL_RE = re.compile(
 # separator between the name and the arg pairs must be optional, not a
 # required "\n". The name itself is matched as non-whitespace, non-"<" so
 # it can't swallow the next tag when there is no separator. The body is matched
-# as one lazy span and then checked pair by pair (see _glm_args), instead of a
-# repeated group of lazy spans, which backtracked exponentially on malformed input.
-_GLM_CALL_RE = re.compile(r"<tool_call>([^\s<]+)\s*(.*?)</tool_call>", re.DOTALL)
-_GLM_ARG_RE = re.compile(r"<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>", re.DOTALL)
+# as one lazy span that may not cross another "<tool_call>" and is then checked
+# pair by pair in _extract_tool_calls, instead of a repeated group of lazy spans,
+# which backtracked exponentially on malformed input. Not crossing "<tool_call>"
+# keeps a stray unclosed start from swallowing the valid call after it, and
+# not crossing "<arg_key>" / "<arg_value>" inside one pair keeps every scan
+# linear when the closing tags are missing.
+_GLM_CALL_RE = re.compile(r"<tool_call>([^\s<]+)\s*((?:(?!<tool_call>).)*?)</tool_call>", re.DOTALL)
+_GLM_ARG_RE = re.compile(
+    r"<arg_key>((?:(?!<arg_key>).)*?)</arg_key>\s*<arg_value>((?:(?!<arg_value>).)*?)</arg_value>",
+    re.DOTALL,
+)
 
 # Functionary (MeetKai) format: ">>>NAME\n{json args}". ">>>all" prefixes
 # plain (non-tool-call) content, not a call. Verified against
