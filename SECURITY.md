@@ -13,9 +13,11 @@ We provide security updates for the following versions of AgentTune:
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
-If you discover a security vulnerability in AgentTune, please report it to us privately by emailing:
+If you discover a security vulnerability in AgentTune, please report it to us privately:
 
-**[security@lexsi.ai](mailto:security@lexsi.ai)**
+1. **Preferred:** GitHub's private vulnerability reporting:
+   [Report a vulnerability](https://github.com/Lexsi-Labs/AgentTune/security/advisories/new)
+2. **Or email:** **[security@lexsi.ai](mailto:security@lexsi.ai)**
 
 ### What to Include
 

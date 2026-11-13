@@ -8,6 +8,11 @@ updates:
     groups:
       pip:
         patterns: ["*"]
+    # torch is pinned to what the [vllm] extra resolves with (trl 1.7.1 -> vllm releases
+    # that pin torch 2.11.0); move torch, torchao and trl together by hand.
+    ignore:
+      - dependency-name: "torch"
+      - dependency-name: "torchao"
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -16,3 +21,7 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+    # Major action upgrades change inputs (e.g. slack v1 -> v4); review those by hand.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
