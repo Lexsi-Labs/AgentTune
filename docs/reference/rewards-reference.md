@@ -100,25 +100,30 @@ Pass `gold_rows` (one list of rows per example) as a dataset column; `gold_sql` 
 
 - **Which result.** The last tool result that is not an error (`{'error': ...}` or text
   starting with "Error"). A failed look-around query after the answer does not undo it;
-  a later query that ran replaces it. Each result is paired with its own call.
+  a later query that ran replaces it. Each result is paired with its own call, and the query
+  is read from the call's `sql_command` argument; a result whose call has no `sql_command`
+  (another tool, such as one that echoes its input) is not a query result and is skipped.
 - **Rows.** Compared as a multiset: row order ignored, duplicates counted. Column order is
   ignored when one column order fits every row (2 to 6 columns). Floats compare within abs
   1e-6 / rel 1e-9 at any depth; two ints compare exactly. A dict row compares by its values
   in column order; lists and dicts inside a cell compare by value.
 - **Row order.** Counts only when `gold_sql` sorts at the top level (`... order by age desc`,
   not an ORDER BY inside a subquery or `over (...)`). Without `gold_sql` it never counts.
+  Rows that tie on the sort key must then come back in gold's order too.
 - **The query must read the database.** A query that compiles on an empty SQLite database
   reads none of your tables (`select 'Joe', 31`, `values (...)`, a CTE of literals,
-  `sqlite_master`), so its rows prove nothing and it does not match. This uses SQLite's
+  `sqlite_master`), so its rows prove nothing and it does not match (so a question whose
+  answer is only in `sqlite_master` never matches). This uses SQLite's
   parser; a query SQLite cannot parse (another dialect) is judged by its rows alone.
 - **Comparison databases (`db_paths`).** One database cannot tell `age >= 30` from
   `age > 30` when nobody is 30, nor a query that reads a table but writes its rows as
   literals (`... union all select name, age from singer where 0`). List SQLite files with
   other data in `db_paths` and give `gold_sql`: both queries are re-run on each file and the
   rows must match there too. The rollout's query is model-written, so files are opened
-  read-only, only reads are allowed, each query stops after 5 seconds, a value over 1 MB is an
-  error, and the query is read only up to one row more than `gold_sql` returns (more is a
-  mismatch). A `gold_sql` that fails, or returns over 100,000 rows, raises `ValueError`.
+  read-only, only reads are allowed and each query stops after 5 seconds; its result is read
+  only while it has gold's number of columns, at most one row more than gold and at most 4x
+  gold's bytes (at least 4 MB), and a value over 1 MB is an error. Anything past those limits
+  is a mismatch. A `gold_sql` that fails, or returns over 100,000 rows, raises `ValueError`.
   SQLite only.
 
 ### Score log

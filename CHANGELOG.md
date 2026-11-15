@@ -39,7 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   @shro-2002 (#21).
 - `result_match_reward` gave +2.0 to a query that writes its rows itself (`select 'Joe', 31
   union all ...`, `values (...)`, a CTE of literals, `sqlite_master`); a query that reads none
-  of the database's tables no longer matches (#20).
+  of the database's tables no longer matches, nor does a result from a call without
+  `sql_command` (a tool that echoes its input) (#20).
 - `result_match_reward` raised `TypeError` on dict rows or on a list or dict inside a cell;
   rows are compared in a canonical form. Floats compare within abs 1e-6 / rel 1e-9, so
   `0.1 + 0.2` matches `0.3` (#20).
