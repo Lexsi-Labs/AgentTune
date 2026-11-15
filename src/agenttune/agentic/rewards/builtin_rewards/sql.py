@@ -9,6 +9,7 @@ import json
 import logging
 import math
 import re
+import sqlite3
 from collections import Counter
 
 from agenttune.agentic.rollout_engines.tool_call_parse import _THINK_BLOCK_RE
@@ -295,10 +296,77 @@ def _rows_match(pred, gold, ordered=False):
     )
 
 
+def _results_with_sql(turns):
+    """(sql, content) per "tool" turn, in order. A result is paired with the first
+    unused call of the same tool name in the assistant turn before it (any call when
+    the turn has no name); sql is None when there is no such call."""
+    out, calls = [], []
+    for turn in turns:
+        if turn.get("role") == "assistant":
+            calls = list(turn.get("tool_calls") or [])
+        elif turn.get("role") == "tool":
+            name = turn.get("name")
+            call = next(
+                (c for c in calls if not name or (c.get("function") or {}).get("name") == name),
+                None,
+            )
+            if call is not None:
+                calls.remove(call)
+            out.append((_sql_of(call) or None if call else None, turn.get("content")))
+    return out
+
+
+def _is_error(content) -> bool:
+    """A failed call: an `{'error': ...}` result or text starting with "Error"."""
+    out = _tool_output(content)
+    if isinstance(out, dict):
+        return "error" in out
+    return isinstance(content, str) and content.lstrip().lower().startswith("error")
+
+
+def _reads_no_table(sql: str):
+    """True when `sql` compiles on an empty SQLite database, so it reads none of the
+    user's tables: literals, VALUES, CTEs of literals, sqlite_master, pragma functions.
+    False when it names a table an empty database lacks. None when SQLite cannot tell
+    (another SQL dialect, a syntax error, several statements)."""
+    con = sqlite3.connect(":memory:")
+    try:
+        con.execute("EXPLAIN " + sql)  # compiles, never runs
+        return True
+    except sqlite3.Error as e:
+        return False if "no such table" in str(e) else None
+    except Exception:
+        return None
+    finally:
+        con.close()
+
+
+def _match(turns, gold):
+    """(score, reason) for one example's turns against its gold rows."""
+    results = _results_with_sql(turns)
+    if not results:
+        return -1.0, "no tool result -> -1.0"
+    ran = [(sql, content) for sql, content in results if not _is_error(content)]
+    if not ran:
+        return -1.0, "every tool call failed -> -1.0"
+    sql, content = ran[-1]
+    rows = _tool_output(content)
+    if not isinstance(rows, list) or not _rows_match(rows, gold):
+        return -1.0, "last result that ran differs from the gold rows -> -1.0"
+    if sql and _reads_no_table(sql):
+        return -1.0, "the query reads no table; its rows are written in the query -> -1.0"
+    return 2.0, "last result that ran equals the gold rows -> +2.0"
+
+
 def result_match_reward(completions, gold_rows=None, **kwargs):
-    """Opt-in: +2.0 when the last SQL tool result holds exactly the gold query's rows
-    (row order ignored, duplicates counted, column order ignored, floats within abs 1e-6 /
-    rel 1e-9; a dict row compares by its values), else -1.0.
+    """Opt-in: +2.0 when the rows of the last query that ran equal the gold query's
+    rows (row order ignored, duplicates counted, column order ignored, floats within
+    abs 1e-6 / rel 1e-9; a dict row compares by its values), else -1.0.
+
+    "Last query that ran" is the last tool result that is not an error: a failed
+    look-around query after the answer does not undo it, a later query that ran does.
+    A query that reads no table (literals, VALUES, sqlite_master) never matches; this
+    check uses SQLite's parser, and a query it cannot parse is judged by its rows.
 
     `gold_rows` is one list of rows per example, e.g. a dataset column TRL passes in.
     A text check of the query cannot tell `where customer_id > 0` from the real
@@ -310,18 +378,7 @@ def result_match_reward(completions, gold_rows=None, **kwargs):
         if gold is None:
             score, reason = 0.0, "no gold_rows for this example -> 0.0"
         else:
-            results = [
-                turn.get("content")
-                for turn in _turns(completion, i, kwargs)
-                if turn.get("role") == "tool"
-            ]
-            last = _tool_output(results[-1]) if results else None
-            if isinstance(last, list) and _rows_match(last, gold):
-                score, reason = 2.0, "last tool result equals the gold rows -> +2.0"
-            elif not results:
-                score, reason = -1.0, "no tool result -> -1.0"
-            else:
-                score, reason = -1.0, "last tool result differs from the gold rows -> -1.0"
+            score, reason = _match(_turns(completion, i, kwargs), gold)
         log_score("sql.result_match_reward", score, reasons=[reason], meta={"index": i})
         rewards.append(score)
     return rewards
