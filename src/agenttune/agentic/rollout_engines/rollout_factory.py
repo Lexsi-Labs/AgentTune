@@ -722,6 +722,13 @@ def _build_tool_schema(fn, use_vllm: bool = False) -> dict:
     return _fallback_tool_schema(fn)
 
 
+def _takes_sql_command(fn) -> bool:
+    try:
+        return "sql_command" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 def _get_callable(tool) -> Callable:
     """Unwrap BaseTool or plain function to a callable."""
     if hasattr(tool, "execute"):
@@ -1397,6 +1404,7 @@ def _wrap_reward_fn(reward_fn: Callable) -> Callable:
         extra["tool_call_counts"] = [
             (t.metadata or {}).get("tool_call_count", 0) for t in trajectories
         ]
+        extra.setdefault("sql_tools", [(t.metadata or {}).get("sql_tools") for t in trajectories])
 
         # ── Style 1 or 2: batch call ──────────────────────────────────────
         # Richest call first; then the pre-#11 fn(responses, prompts=...) /
@@ -1476,6 +1484,7 @@ def _format_for_grpo(
         "tool_call_counts": [
             t.metadata.get("tool_call_count", 0) if t.metadata else 0 for t in trajectories
         ],
+        "sql_tools": [t.metadata.get("sql_tools") if t.metadata else None for t in trajectories],
         # FinDER golden-chunk-recall plumbing: forwarded to reward fns as the
         # `retrieved_chunk_ids` kwarg (TRL passes rollout-output extra keys
         # through to reward_funcs exactly like tool_call_counts).
@@ -1874,6 +1883,9 @@ def _execute_trajectory(
     for t in tools:
         name = t.name if hasattr(t, "name") else t.__name__
         tool_callable_map[name] = _get_callable(t)
+    # Tools that run SQL, from their signatures (not from what the model sends):
+    # SQL rewards count only these results.
+    sql_tools = [n for n, fn in tool_callable_map.items() if _takes_sql_command(fn)]
 
     tool_schemas = []
     for t in tools:
@@ -2613,6 +2625,7 @@ def _execute_trajectory(
             # model, so keep the real "tool" turns for scoring.
             "reward_conversation": prompt_turns + completions_list if fold_tool_results else None,
             "completions_list": completions_list,
+            "sql_tools": sql_tools,
             "tool_mask": list(all_tool_mask),
             "tool_call_count": tool_call_count,
             "tool_failure_count": tool_failure_count,

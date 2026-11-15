@@ -275,3 +275,95 @@ def test_large_gold_still_bounds_the_query(tmp_path):
     big = "select name, printf('%.*c', 999999, 'x') from singer"
     assert score(turns((big, gold)), gold, gold_sql=[gold_sql], db_paths=[[db]]) == -1.0
     assert "more data" in last_reason()
+
+
+# ── which tools run SQL ──────────────────────────────────────────────────────
+
+
+def lookup_turns(rows, args):
+    return [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"function": {"name": "lookup", "arguments": args}}],
+        },
+        {"role": "tool", "name": "lookup", "content": rows},
+    ]
+
+
+def test_only_configured_sql_tools_count():
+    # A non-SQL tool whose arguments carry SQL and whose output equals the gold rows.
+    conv = lookup_turns(GOLD, {"sql_command": GOOD, "sql": GOOD})
+    assert score(conv, sql_tools=[["run_sql"]]) == -1.0
+    assert score(turns((GOOD, GOLD)), sql_tools=[["run_sql"]]) == 2.0
+    assert score(turns((GOOD, GOLD)), sql_tools=[["query_biogrid"]]) == -1.0
+    assert score(turns((GOOD, GOLD)) + conv, sql_tools=[["run_sql"]]) == 2.0
+
+
+def test_rollout_names_its_sql_tools():
+    import json
+    import warnings
+
+    from test_cohere_tool_calls import _ScriptedEngine, _tokenizer
+    from test_folded_rollout_rewards import run_sql
+
+    from agenttune.agentic.rollout_engines.rollout_factory import create_rollout_fn
+
+    def lookup(sql_text: str) -> str:
+        """Echo text.
+
+        Args:
+            sql_text: Any text.
+        """
+        return sql_text
+
+    calls = [{"tool_call_id": "0", "tool_name": "lookup", "parameters": {"sql_text": str(GOLD)}}]
+    engine = _ScriptedEngine(
+        _tokenizer("command_r7b_tool_use.jinja"),
+        f"<|START_ACTION|>{json.dumps(calls)}<|END_ACTION|>",
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        out = create_rollout_fn(rollout_engine=engine, tools=[run_sql, lookup], max_steps=1)(["q?"])
+    assert out["sql_tools"] == [["run_sql"]]
+    kw = {"conversations": out["conversations"], "sql_tools": out["sql_tools"]}
+    assert R.result_match_reward([""], gold_rows=[GOLD], **kw) == [-1.0]
+
+
+def test_tampered_tool_output_does_not_pay(tmp_path):
+    # The tool's content claims the gold rows, but the query does not return them.
+    train = make_db(tmp_path / "a.db", [("Joe", 31), ("Ann", 45)])
+    wrong = "select name, age from singer where age > 40"
+    assert score(turns((wrong, GOLD))) == 2.0  # rows alone are trusted
+    assert score(turns((wrong, GOLD)), gold_sql=[GOLD_SQL], db_paths=[[train]]) == -1.0
+
+
+@pytest.mark.parametrize(
+    "sql, gold_sql, gold",
+    [
+        # gold is empty: the width still decides, before any row is computed
+        (
+            "select "
+            + ", ".join(f"printf('%.*c', 999999, 'x') as c{i}" for i in range(2000))
+            + " from singer",
+            "select name, age from singer where age > 100",
+            [],
+        ),
+        (f"select {WIDE} from singer where age > 30", GOLD_SQL, GOLD),
+    ],
+)
+def test_wide_queries_are_rejected_before_any_row(dbs, sql, gold_sql, gold):
+    import resource
+    import sys
+    import time
+
+    def peak_kib():
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return peak / 1024 if sys.platform == "darwin" else peak
+
+    before, start = peak_kib(), time.perf_counter()
+    conv = turns((sql, "[]" if not gold else GOLD))
+    assert score(conv, gold, gold_sql=[gold_sql], db_paths=[dbs]) == -1.0
+    assert "number of columns" in last_reason()
+    assert time.perf_counter() - start < 2.0
+    assert peak_kib() - before < 100 * 1024
