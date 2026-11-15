@@ -4,6 +4,7 @@ Add new functions here — they are auto-discovered via REWARD_REGISTRY below.
 """
 
 import ast
+import itertools
 import json
 import logging
 import re
@@ -210,13 +211,58 @@ def _row_key(row):
     return tuple(row) if isinstance(row, list | tuple) else (row,)
 
 
+# A tool result that the rollout folded into a user turn (rollout_factory's default
+# tool_result_format), as it does for chat templates that ignore `tools` (Tiny Aya,
+# Aya Expanse, North, Gemma 3). Without this such rollouts have no "tool" turn at all.
+_FOLDED_RESULT_RE = re.compile(
+    r"\ATool result for [^:\n]*: (.*?)(?:\nUse this result to answer the original question\.)?\Z",
+    re.DOTALL,
+)
+_MAX_PERMUTED_COLUMNS = 6
+
+
+def _tool_results(turns):
+    """Tool result contents in order: "tool" turns, plus results folded into user turns
+    (consecutive results are merged into one user turn, separated by a blank line)."""
+    out = []
+    for turn in turns:
+        content = turn.get("content")
+        if turn.get("role") == "tool":
+            out.append(content)
+        elif turn.get("role") == "user" and isinstance(content, str):
+            for part in content.split("\n\n"):
+                m = _FOLDED_RESULT_RE.match(part)
+                if m:
+                    out.append(m.group(1))
+    return out
+
+
+def _rows_match(pred, gold):
+    """Rows equal as a multiset, allowing one column permutation applied to every row
+    (`select age, name` answers `select name, age`). Permutations are tried only for
+    2 to _MAX_PERMUTED_COLUMNS columns of equal width."""
+    gold_counts = Counter(map(_row_key, gold))
+    pred_rows = [_row_key(r) for r in pred]
+    if Counter(pred_rows) == gold_counts:
+        return True
+    widths = {len(r) for r in pred_rows} | {len(r) for r in gold_counts}
+    if len(widths) != 1 or not 1 < next(iter(widths)) <= _MAX_PERMUTED_COLUMNS:
+        return False
+    n = next(iter(widths))
+    return any(
+        Counter(tuple(r[j] for j in perm) for r in pred_rows) == gold_counts
+        for perm in itertools.permutations(range(n))
+    )
+
+
 def result_match_reward(completions, gold_rows=None, **kwargs):
     """Opt-in: +2.0 when the last SQL tool result holds exactly the gold query's rows
-    (order ignored, duplicates counted), else -1.0.
+    (row order ignored, duplicates counted, column order ignored), else -1.0.
 
     `gold_rows` is one list of rows per example, e.g. a dataset column TRL passes in.
     A text check of the query cannot tell `where customer_id > 0` from the real
-    filter; comparing the rows can. Examples without gold rows score 0.0.
+    filter; comparing the rows can. Tool results folded into user turns (templates
+    that ignore `tools`) are read too. Examples without gold rows score 0.0.
     """
     rewards = []
     for i, completion in enumerate(completions):
@@ -224,15 +270,9 @@ def result_match_reward(completions, gold_rows=None, **kwargs):
         if gold is None:
             score, reason = 0.0, "no gold_rows for this example -> 0.0"
         else:
-            results = [
-                turn.get("content")
-                for turn in _turns(completion, i, kwargs)
-                if turn.get("role") == "tool"
-            ]
+            results = _tool_results(_turns(completion, i, kwargs))
             last = _tool_output(results[-1]) if results else None
-            if isinstance(last, list) and Counter(map(_row_key, last)) == Counter(
-                map(_row_key, gold)
-            ):
+            if isinstance(last, list) and _rows_match(last, gold):
                 score, reason = 2.0, "last tool result equals the gold rows -> +2.0"
             elif not results:
                 score, reason = -1.0, "no tool result -> -1.0"
