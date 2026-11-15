@@ -2320,7 +2320,10 @@ def _execute_trajectory(
 
         # ── Execute tool calls ────────────────────────────────────────────────
         calls_to_run = []
-        unknown_calls = []
+        # One slot per call, in call order: an error for a call that cannot run,
+        # None for one that runs below. Each "tool" turn is paired with its call by
+        # position, so the order must not change.
+        tool_results: list = []
 
         for tc in tool_calls:
             tool_call_count += 1
@@ -2334,21 +2337,21 @@ def _execute_trajectory(
 
             if not name:
                 tool_failure_count += 1
-                unknown_calls.append(
+                tool_results.append(
                     (tc.get("name", "unknown"), {"error": f"Unsupported call: {tc!r}"})
                 )
                 continue
 
             if name not in tool_callable_map:
                 tool_failure_count += 1
-                unknown_calls.append((name, {"error": f"Tool '{name}' not found"}))
+                tool_results.append((name, {"error": f"Tool '{name}' not found"}))
                 continue
 
             calls_to_run.append((name, tool_callable_map[name], arguments))
+            tool_results.append(None)
 
-        tool_results: list[tuple] = unknown_calls.copy()
-        if calls_to_run:
-            tool_results.extend(_run_tools_parallel(calls_to_run))
+        ran = iter(_run_tools_parallel(calls_to_run) if calls_to_run else [])
+        tool_results = [r if r is not None else next(ran) for r in tool_results]
 
         for _, result in tool_results:
             if isinstance(result, dict) and "error" in result:

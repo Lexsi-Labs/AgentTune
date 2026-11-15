@@ -121,3 +121,23 @@ def test_folded_rollout_still_shows_the_model_its_results():
     assert "<|USER_TOKEN|>Tool result for run_sql: [(31, 'Joe'), (45, 'Ann')]" in engine.prompts[1]
     # The stored conversation is still what the model saw.
     assert "tool" not in [m["role"] for m in out["trajectories"][0].metadata["conversation"]]
+
+
+def test_tool_results_keep_the_order_of_their_calls():
+    # A failed lookup (unknown tool) after a real call used to be listed first, so
+    # each "tool" turn carried the other call's id.
+    calls = [
+        {"tool_call_id": "0", "tool_name": "run_sql", "parameters": {"sql_command": GOOD}},
+        {"tool_call_id": "1", "tool_name": "nosuch", "parameters": {}},
+    ]
+    template = "command_r7b_tool_use.jinja"
+    engine = _ScriptedEngine(
+        _tokenizer(template), f"<|START_ACTION|>{json.dumps(calls)}<|END_ACTION|>"
+    )
+    conv = create_rollout_fn(rollout_engine=engine, tools=[run_sql], max_steps=1)(["q?"])[
+        "conversations"
+    ][0]
+    ids = {c["id"]: c["function"]["name"] for m in conv for c in m.get("tool_calls") or []}
+    results = [m for m in conv if m["role"] == "tool"]
+    assert [ids[m["tool_call_id"]] for m in results] == [m["name"] for m in results]
+    assert [m["name"] for m in results] == ["run_sql", "nosuch"]
