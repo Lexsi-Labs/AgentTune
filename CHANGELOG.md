@@ -53,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `0.1 + 0.2` matches `0.3` (#20).
 - When one assistant turn called both a tool that could not run and one that could, each tool
   result carried the other call's id; results now stay in call order.
+- `agenttune.agentic.events.judgment_hook` could not be imported (`agentic/events.py` shadowed
+  the `agentic/events/` folder) and was left out of the wheel. The event types moved into
+  `agentic/events/__init__.py`; `from agenttune.agentic.events import Event, EventKind, EventLog`
+  works as before.
 - `load_finqa_datasets(data_dir=...)` unpacked the download into `./data` whatever `data_dir`
   said, then failed to find the CSVs in `data_dir`; the files now go to `data_dir`.
 - `ToolRegistry.get(name)` imports only the requested builtin's module; fetching

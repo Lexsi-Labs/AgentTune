@@ -15,7 +15,7 @@ same normalized event stream, so a trajectory produced anywhere is consumable ev
 The `EventLog` is an *additive projection layer*: it wraps the existing `agentic.Trajectory`,
 DECIDE `PipelineState`, and eval dicts without modifying them.
 
-**The two tiers** (`events.py`):
+**The two tiers** (`events/__init__.py`):
 
 | tier | source | carries | used for |
 |------|--------|---------|----------|

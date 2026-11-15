@@ -8,20 +8,7 @@ from pathlib import Path
 import pytest
 
 import agenttune.eval.agentic.trajectory_eval as te
-
-
-def _load_judgment_hook():
-    # agentic/events.py shadows the agentic/events/ folder, so load the file directly.
-    import importlib.util
-
-    path = Path(te.__file__).parents[2] / "agentic" / "events" / "judgment_hook.py"
-    spec = importlib.util.spec_from_file_location("judgment_hook", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.JudgmentHook
-
-
-JudgmentHook = _load_judgment_hook()
+from agenttune.agentic.events.judgment_hook import JudgmentHook
 
 VERDICT = json.dumps(
     {

@@ -92,7 +92,7 @@ def as_dataset(self, fmt: str = "sft") -> list[dict]
 ```
 
 Iterates stored items and, for every one whose `content.tier == "full"`, extends the output
-with `content.as_dataset_rows(fmt)` (an `EventLog` method; see `agentic/events.py`).
+with `content.as_dataset_rows(fmt)` (an `EventLog` method; see `agentic/events/__init__.py`).
 Light-tier logs (e.g. anything projected from a DECIDE `PipelineState` via
 `EventLog.from_pipeline_state`) are silently skipped: zero rows, no error.
 `EventLog.as_dataset_rows` itself only supports `fmt="sft"` today; anything else raises
