@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `result_match_reward(..., gold_sql=..., db_paths=...)`, both optional dataset columns:
   row order counts when `gold_sql` ends in a top-level ORDER BY, and `db_paths` lists SQLite
   files on which the rollout's query and `gold_sql` must also return the same rows (#20).
+- Rollouts pass `sql_tools` to reward functions: the names of the tools whose signature takes
+  `sql_command`. `result_match_reward` counts only those tools' results (#20).
 - `agenttune train --tools read_file,list_dir`: comma-separated `ToolRegistry` names,
   passed to the trainer as `tools=`, so agentic tool-calling training runs from the CLI.
 - `result_match_reward(completions, gold_rows=...)` (opt-in, registered): `+2.0` when the last
@@ -39,8 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   @shro-2002 (#21).
 - `result_match_reward` gave +2.0 to a query that writes its rows itself (`select 'Joe', 31
   union all ...`, `values (...)`, a CTE of literals, `sqlite_master`); a query that reads none
-  of the database's tables no longer matches, nor does a result from a call without
-  `sql_command` (a tool that echoes its input) (#20).
+  of the database's tables no longer matches, nor does a result from a tool that runs no SQL
+  (one that echoes its input) (#20).
 - `result_match_reward` raised `TypeError` on dict rows or on a list or dict inside a cell;
   rows are compared in a canonical form. Floats compare within abs 1e-6 / rel 1e-9, so
   `0.1 + 0.2` matches `0.3` (#20).

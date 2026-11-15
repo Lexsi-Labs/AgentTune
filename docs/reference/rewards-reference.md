@@ -68,7 +68,7 @@ the list form.
 | `correctness_reward` | `sql.py` | `(completions, answer=None, **kwargs)` | Parses `*yes*`/`*no*` from the completion; `-0.5` no match, `0.6` matches `answer`, `-1.0` wrong |
 | `structure_reward` | `sql.py` | `(completions, **kwargs)` | Tool-call → tool-response → content shape: `0.1`/`0.05` if well-formed, `-0.15` if a call was made with no response, else `0.0` |
 | `query_reward` | `sql.py` | `(completions, answer=None, **kwargs)` | SQL strategy heuristic: penalizes >3 queries, `LIMIT 1`, and a missing `WHERE` or one that names no column (`where 1 = 1`); rewards a `yes`/`no` `answer` that matches whether any rows were found. Text tool output (`"[(7, 'Ana')]"`) is parsed |
-| `result_match_reward` | `sql.py` | `(completions, gold_rows=None, gold_sql=None, db_paths=None, **kwargs)` | Opt-in. `+2.0` if the rows of the last query that ran equal the gold rows, else `-1.0`; `0.0` for an example without `gold_rows`. Catches filters a text check cannot, such as `where customer_id > 0`. See [below](#result_match_reward-what-counts-as-a-match) |
+| `result_match_reward` | `sql.py` | `(completions, gold_rows=None, gold_sql=None, db_paths=None, sql_tools=None, **kwargs)` | Opt-in. `+2.0` if the rows of the last query that ran equal the gold rows, else `-1.0`; `0.0` for an example without `gold_rows`. Catches filters a text check cannot, such as `where customer_id > 0`. See [below](#result_match_reward-what-counts-as-a-match) |
 | `reward_correct_answer` | `sql.py` | `(completions, answer=None, **kwargs)` | Numeric match against `answer` in the final assistant message: `1.5` exact (±1e-3), `0.5` within 1%, else `0.0` |
 | `reward_tool_used` | `sql.py` | `(completions, **kwargs)` | `1.0` if any message has `role: tool`, else `0.0` |
 | `reward_concise_answer` | `sql.py` | `(completions, **kwargs)` | `0.3` if the final assistant message is ≤80 words |
@@ -101,8 +101,11 @@ Pass `gold_rows` (one list of rows per example) as a dataset column; `gold_sql` 
 - **Which result.** The last tool result that is not an error (`{'error': ...}` or text
   starting with "Error"). A failed look-around query after the answer does not undo it;
   a later query that ran replaces it. Each result is paired with its own call, and the query
-  is read from the call's `sql_command` argument; a result whose call has no `sql_command`
-  (another tool, such as one that echoes its input) is not a query result and is skipped.
+  is read from the call's `sql_command` argument. Only results from SQL tools count: the
+  rollout passes `sql_tools`, the names of the tools whose signature takes `sql_command`
+  (read from your code, not from what the model sends). Pass a `sql_tools` column to name
+  them yourself. Without it (a conversation you built), a result counts when its call
+  carries `sql_command`.
 - **Rows.** Compared as a multiset: row order ignored, duplicates counted. Column order is
   ignored when one column order fits every row (2 to 6 columns). Floats compare within abs
   1e-6 / rel 1e-9 at any depth; two ints compare exactly. A dict row compares by its values
@@ -121,9 +124,10 @@ Pass `gold_rows` (one list of rows per example) as a dataset column; `gold_sql` 
   other data in `db_paths` and give `gold_sql`: both queries are re-run on each file and the
   rows must match there too. The rollout's query is model-written, so files are opened
   read-only, only reads are allowed and each query stops after 5 seconds; its result is read
-  only while it has gold's number of columns, at most one row more than gold and at most 4x
-  gold's bytes (at least 4 MB), and a value over 1 MB is an error. Anything past those limits
-  is a mismatch. A `gold_sql` that fails, or returns over 100,000 rows, raises `ValueError`.
+  only if it has gold's number of columns (checked before any row is computed), up to one
+  row more than gold and 4x gold's bytes (at least 4 MB), and a value over 1 MB is an error.
+  Anything past those limits is a mismatch. List the training database in `db_paths` too,
+  and the query is re-run there instead of trusting the rows the tool returned. A `gold_sql` that fails, or returns over 100,000 rows, raises `ValueError`.
   SQLite only.
 
 ### Score log
