@@ -94,3 +94,112 @@ def test_result_is_paired_with_its_own_call():
         {"role": "tool", "name": "nosuch", "content": "{'error': \"Tool 'nosuch' not found\"}"},
     ]
     assert score(conv) == -1.0
+
+
+# ── gold_sql: row order, and comparison databases ────────────────────────────
+
+
+def make_db(path, rows):
+    import sqlite3
+
+    con = sqlite3.connect(path)
+    con.execute("create table singer(name text, age int)")
+    con.executemany("insert into singer values (?, ?)", rows)
+    con.execute("create view adults as select name, age from singer where age >= 18")
+    con.commit()
+    con.close()
+    return str(path)
+
+
+@pytest.fixture
+def dbs(tmp_path):
+    """The training database has nobody aged 30; the comparison databases do, and one
+    holds other people altogether."""
+    return [
+        make_db(tmp_path / "b.db", [("Joe", 31), ("Ann", 45), ("Bob", 30)]),
+        make_db(tmp_path / "c.db", [("Zed", 50), ("Kim", 12)]),
+    ]
+
+
+GOLD_SQL = "select name, age from singer where age > 30"
+UNION_HACK = (
+    "select 'Joe', 31 union all select 'Ann', 45 union all select name, age from singer where 0"
+)
+EXISTS_HACK = (
+    "select 'Joe', 31 where exists (select 1 from singer) "
+    "union all select 'Ann', 45 where exists (select 1 from singer)"
+)
+
+
+@pytest.mark.parametrize(
+    "sql, alone, with_dbs",
+    [
+        (GOOD, 2.0, 2.0),
+        ("select age, name from singer where age between 31 and 200", 2.0, 2.0),
+        ("select name, age from singer where age >= 30", 2.0, -1.0),  # issue #20 (b)
+        (UNION_HACK, 2.0, -1.0),
+        (EXISTS_HACK, 2.0, -1.0),
+        ("select name, age from singer where name in ('Joe', 'Ann')", 2.0, -1.0),
+    ],
+)
+def test_comparison_databases(dbs, sql, alone, with_dbs):
+    conv = turns((sql, GOLD))
+    assert score(conv) == alone
+    assert score(conv, gold_sql=[GOLD_SQL], db_paths=[dbs]) == with_dbs
+
+
+def test_comparison_databases_are_read_only(dbs):
+    import sqlite3
+
+    conv = turns(("delete from singer", "[]"))
+    gold_sql = "select name from singer where age > 100"
+    assert score(conv, gold=[], gold_sql=[gold_sql], db_paths=[dbs]) == -1.0
+    assert sqlite3.connect(dbs[0]).execute("select count(*) from singer").fetchone() == (3,)
+
+
+def test_runaway_query_is_stopped(dbs, monkeypatch):
+    monkeypatch.setattr(R, "_QUERY_SECONDS", 0.2)
+    forever = (
+        "with recursive c(x) as (select 1 union all select x + 1 from c) "
+        "select name, age from singer where age > 30 and (select count(*) from c) > 0"
+    )
+    assert score(turns((forever, GOLD)), gold_sql=[GOLD_SQL], db_paths=[dbs]) == -1.0
+
+
+def test_broken_gold_sql_is_reported(dbs):
+    with pytest.raises(ValueError, match="gold_sql"):
+        score(turns((GOOD, GOLD)), gold_sql=["select nope from singer"], db_paths=[dbs])
+    with pytest.raises(ValueError, match="gold_sql"):
+        score(turns((GOOD, GOLD)), db_paths=[dbs])
+
+
+@pytest.mark.parametrize(
+    "gold_sql, expected",
+    [
+        ("select name, age from singer where age > 30 order by age desc", -1.0),
+        ("select name, age from singer where age > 30", 2.0),
+        (None, 2.0),
+    ],
+)
+def test_row_order_counts_when_gold_orders(gold_sql, expected):
+    gold = [["Ann", 45], ["Joe", 31]]  # in the gold query's order
+    assert score(turns((GOOD, [["Joe", 31], ["Ann", 45]])), gold, gold_sql=[gold_sql]) == expected
+    assert score(turns((GOOD, gold)), gold, gold_sql=[gold_sql]) == 2.0
+
+
+@pytest.mark.parametrize(
+    "sql, ordered",
+    [
+        ("select a from t order by a", True),
+        ("SELECT a FROM t\nORDER\n BY a DESC LIMIT 3", True),
+        ("select a from t union select b from u order by 1", True),
+        ("select a from (select a from t order by a)", False),  # subquery only
+        ("select a, rank() over (order by b) from t", False),  # window
+        ("select 'order by' from t", False),  # in a literal
+        ("select a from t -- order by a", False),  # in a comment
+        ('select "order by" from t', False),  # quoted identifier
+        ("select a from t", False),
+    ],
+)
+def test_top_level_order_by(sql, ordered):
+    assert R._has_top_level_order_by(sql) is ordered

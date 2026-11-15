@@ -10,7 +10,9 @@ import logging
 import math
 import re
 import sqlite3
+import time
 from collections import Counter
+from pathlib import Path
 
 from agenttune.agentic.rollout_engines.tool_call_parse import _THINK_BLOCK_RE
 from agenttune.utils.score_logger import log_score
@@ -341,8 +343,50 @@ def _reads_no_table(sql: str):
         con.close()
 
 
-def _match(turns, gold):
+# Strings, quoted identifiers and comments, earliest first, so none hides inside another.
+_SQL_NOISE_RE = re.compile(
+    r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|--[^\n]*|/\*.*?(?:\*/|\Z)", re.DOTALL
+)
+
+
+def _has_top_level_order_by(sql: str) -> bool:
+    """True when the query itself sorts its rows: ORDER BY outside any parentheses
+    (not in a subquery or `over (...)`), strings or comments."""
+    depth, top = 0, []
+    for ch in _SQL_NOISE_RE.sub(" ", sql):
+        depth += (ch == "(") - (ch == ")")
+        top.append(ch if depth == 0 and ch != ")" else " ")
+    return re.search(r"\border\s+by\b", "".join(top), re.IGNORECASE) is not None
+
+
+_QUERY_SECONDS = 5.0
+_READ_ACTIONS = {
+    sqlite3.SQLITE_SELECT,
+    sqlite3.SQLITE_READ,
+    sqlite3.SQLITE_FUNCTION,
+    sqlite3.SQLITE_RECURSIVE,
+}
+
+
+def _run_read_only(path, sql: str) -> list:
+    """Rows of `sql` on the SQLite file at `path`. The query is model-written: the file
+    is opened read-only, only reads are allowed, and it is stopped after _QUERY_SECONDS."""
+    con = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        con.set_authorizer(
+            lambda action, *_: sqlite3.SQLITE_OK if action in _READ_ACTIONS else sqlite3.SQLITE_DENY
+        )
+        deadline = time.monotonic() + _QUERY_SECONDS
+        con.set_progress_handler(lambda: time.monotonic() > deadline, 10_000)
+        return con.execute(sql).fetchall()
+    finally:
+        con.close()
+
+
+def _match(turns, gold, gold_sql=None, db_paths=()):
     """(score, reason) for one example's turns against its gold rows."""
+    if db_paths and not gold_sql:
+        raise ValueError("result_match_reward: db_paths needs gold_sql for the same example")
     results = _results_with_sql(turns)
     if not results:
         return -1.0, "no tool result -> -1.0"
@@ -350,15 +394,29 @@ def _match(turns, gold):
     if not ran:
         return -1.0, "every tool call failed -> -1.0"
     sql, content = ran[-1]
+    ordered = bool(gold_sql) and _has_top_level_order_by(gold_sql)
     rows = _tool_output(content)
-    if not isinstance(rows, list) or not _rows_match(rows, gold):
+    if not isinstance(rows, list) or not _rows_match(rows, gold, ordered):
         return -1.0, "last result that ran differs from the gold rows -> -1.0"
     if sql and _reads_no_table(sql):
         return -1.0, "the query reads no table; its rows are written in the query -> -1.0"
+    for path in db_paths:
+        if not sql:
+            return -1.0, "no query to re-run on the comparison databases -> -1.0"
+        try:
+            want = _run_read_only(path, gold_sql)
+        except sqlite3.Error as e:
+            raise ValueError(f"result_match_reward: gold_sql failed on {path}: {e}") from e
+        try:
+            got = _run_read_only(path, sql)
+        except sqlite3.Error as e:
+            return -1.0, f"the query fails on comparison database {path} ({e}) -> -1.0"
+        if not _rows_match(got, want, ordered):
+            return -1.0, f"the query differs from gold_sql on comparison database {path} -> -1.0"
     return 2.0, "last result that ran equals the gold rows -> +2.0"
 
 
-def result_match_reward(completions, gold_rows=None, **kwargs):
+def result_match_reward(completions, gold_rows=None, gold_sql=None, db_paths=None, **kwargs):
     """Opt-in: +2.0 when the rows of the last query that ran equal the gold query's
     rows (row order ignored, duplicates counted, column order ignored, floats within
     abs 1e-6 / rel 1e-9; a dict row compares by its values), else -1.0.
@@ -371,6 +429,15 @@ def result_match_reward(completions, gold_rows=None, **kwargs):
     `gold_rows` is one list of rows per example, e.g. a dataset column TRL passes in.
     A text check of the query cannot tell `where customer_id > 0` from the real
     filter; comparing the rows can. Examples without gold rows score 0.0.
+
+    Optional, per example (dataset columns too):
+      `gold_sql`: the gold query. When it ends in a top-level ORDER BY, row order
+        counts; otherwise it does not. Without it, row order never counts.
+      `db_paths`: SQLite files to re-run both queries on (needs `gold_sql`). The
+        rows must match on each one as well. One database cannot tell
+        `age >= 30` from `age > 30` when nobody is 30, nor a query that reads a
+        table but writes its rows in literals; a database with other data can.
+        Files are opened read-only and each query is stopped after 5 seconds.
     """
     rewards = []
     for i, completion in enumerate(completions):
@@ -378,7 +445,13 @@ def result_match_reward(completions, gold_rows=None, **kwargs):
         if gold is None:
             score, reason = 0.0, "no gold_rows for this example -> 0.0"
         else:
-            score, reason = _match(_turns(completion, i, kwargs), gold)
+            paths = db_paths[i] if db_paths is not None and i < len(db_paths) else None
+            score, reason = _match(
+                _turns(completion, i, kwargs),
+                gold,
+                gold_sql[i] if gold_sql is not None and i < len(gold_sql) else None,
+                [paths] if isinstance(paths, str) else paths or (),
+            )
         log_score("sql.result_match_reward", score, reasons=[reason], meta={"index": i})
         rewards.append(score)
     return rewards
