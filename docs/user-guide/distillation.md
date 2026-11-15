@@ -230,7 +230,7 @@ print(rows[0].keys())                 # dict_keys(['messages', 'segment_weights'
 ```
 
 Each row comes from `EventLog.as_dataset_rows("sft")`
-(`src/agenttune/agentic/events.py`), and the schema is real and stable; this is what any
+(`src/agenttune/agentic/events/__init__.py`), and the schema is real and stable; this is what any
 `trainer_factory` you write receives as `train_dataset`:
 
 ```python

@@ -1,6 +1,6 @@
 # EventLog: the shared trajectory schema
 
-`agenttune.agentic.events` (`src/agenttune/agentic/events.py`): one dataclass file, pure
+`agenttune.agentic.events` (`src/agenttune/agentic/events/__init__.py`): one dataclass file, pure
 stdlib (`json`, `uuid`, `dataclasses`, `enum`), no imports from the rest of the repo. Every
 other page on this site that mentions "trajectory" is ultimately talking about this file.
 See [Python API: Agentic Spine](../user-guide/agentic-spine.md) for the one-page
@@ -33,7 +33,7 @@ class EventKind(Enum):
     MEMORY_OP = "memory_op"          # ADD/UPDATE/DELETE/NOOP on memory
 ```
 
-These are exactly the eight values defined in `events.py`, no more, no fewer. A few notes
+These are exactly the eight values defined in `events/__init__.py`, no more, no fewer. A few notes
 from reading the rest of the module against this list:
 
 - **`MEMORY_OP` is declared but never emitted anywhere in this file.** None of the three
@@ -41,7 +41,7 @@ from reading the rest of the module against this list:
   export/`as_dataset_rows` methods branch on it. It exists in the enum for memory-backed
   strategies (`MemoryReActStrategy` et al., see
   [Python API: Agentic Spine](../user-guide/agentic-spine.md))
-  to append later; nothing in `events.py` itself produces one.
+  to append later; nothing in `events/__init__.py` itself produces one.
 - **`REWARD` is the only kind with a meaningful `scope`.** The `Event.scope` field is
   documented as "REWARD only: step|turn|episode", and every reward-emitting site in this file
   sets one: `from_trajectory` emits a per-step reward with `scope="step"` and one final

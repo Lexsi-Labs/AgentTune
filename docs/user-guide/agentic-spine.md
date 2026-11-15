@@ -14,7 +14,7 @@ policy with real RL is [User Guide: RL Training](rl-training.md); this page is a
 
 ## `EventLog`: the shared trajectory format
 
-An `EventLog` (`agenttune/agentic/events.py`) is a list of typed `Event`s plus a `tier`:
+An `EventLog` (`agenttune/agentic/events/__init__.py`) is a list of typed `Event`s plus a `tier`:
 
 ```python
 from agenttune.agentic import Event, EventKind, EventLog

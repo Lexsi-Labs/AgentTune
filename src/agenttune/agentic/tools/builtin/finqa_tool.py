@@ -41,8 +41,10 @@ import json
 import logging
 import os
 import re
+import shutil
 import sqlite3
 import tarfile
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -498,7 +500,8 @@ def load_finqa_datasets(
     HuggingFace Dataset objects ready for create_agentic_trainer().
 
     Args:
-        data_dir:        Where to find the CSVs. Defaults to ./data/multi_table_data
+        data_dir:        Where the CSVs and company_tables/ are, and where a download
+                         puts them. Defaults to ./data/data
         force_download:  Re-download even if data already exists.
 
     Returns:
@@ -522,12 +525,22 @@ def load_finqa_datasets(
             filename="data.tar.gz",
             repo_type="dataset",
         )
-        # Extract to parent of data_dir so that multi_table_data/ and
-        # company_tables/ land at ./data/multi_table_data and
-        # ./data/company_tables respectively.
-        with tarfile.open(tar_path, "r:gz") as tar:
+        # The archive holds one top folder, data/ (the CSVs and company_tables/).
+        # Unpack beside data_dir and move that folder's contents into data_dir,
+        # so any data_dir works (not only ./data/data).
+        with (
+            tempfile.TemporaryDirectory(dir=data_dir.parent) as tmp,
+            tarfile.open(tar_path, "r:gz") as tar,
+        ):
             # filter="data" (py3.12+) rejects path-traversal / absolute members before write.
-            tar.extractall(path=Path("./data"), filter="data")
+            tar.extractall(path=tmp, filter="data")
+            for item in (Path(tmp) / "data").iterdir():
+                target = data_dir / item.name
+                if target.is_dir():
+                    shutil.rmtree(target)
+                elif target.exists():
+                    target.unlink()
+                shutil.move(str(item), str(target))
         logger.info("Extracted files:")
         for f in sorted(data_dir.rglob("*.csv")):
             logger.info(f"  {f}")

@@ -722,6 +722,13 @@ def _build_tool_schema(fn, use_vllm: bool = False) -> dict:
     return _fallback_tool_schema(fn)
 
 
+def _takes_sql_command(fn) -> bool:
+    try:
+        return "sql_command" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 def _get_callable(tool) -> Callable:
     """Unwrap BaseTool or plain function to a callable."""
     if hasattr(tool, "execute"):
@@ -1354,7 +1361,9 @@ def _wrap_reward_fn(reward_fn: Callable) -> Callable:
         prompt_texts = []
         extra_cols: dict[str, list] = {}
         for t, resp, p in zip(trajectories, responses, prompts, strict=False):
-            conv = (t.metadata or {}).get("conversation")
+            conv = (t.metadata or {}).get("reward_conversation") or (t.metadata or {}).get(
+                "conversation"
+            )
             msgs = conv or (t.to_trl_format().get("messages") or [])
             # Score what the model generated: the turns from its first reply on,
             # not the system/user prompt. The single-turn path records only the
@@ -1395,6 +1404,7 @@ def _wrap_reward_fn(reward_fn: Callable) -> Callable:
         extra["tool_call_counts"] = [
             (t.metadata or {}).get("tool_call_count", 0) for t in trajectories
         ]
+        extra.setdefault("sql_tools", [(t.metadata or {}).get("sql_tools") for t in trajectories])
 
         # ── Style 1 or 2: batch call ──────────────────────────────────────
         # Richest call first; then the pre-#11 fn(responses, prompts=...) /
@@ -1464,11 +1474,17 @@ def _format_for_grpo(
         "trajectories": trajectories,
         "tools_used": tools_enabled,
         "conversations": [
-            t.metadata.get("conversation", []) if t.metadata else [] for t in trajectories
+            (
+                (t.metadata.get("reward_conversation") or t.metadata.get("conversation", []))
+                if t.metadata
+                else []
+            )
+            for t in trajectories
         ],
         "tool_call_counts": [
             t.metadata.get("tool_call_count", 0) if t.metadata else 0 for t in trajectories
         ],
+        "sql_tools": [t.metadata.get("sql_tools") if t.metadata else None for t in trajectories],
         # FinDER golden-chunk-recall plumbing: forwarded to reward fns as the
         # `retrieved_chunk_ids` kwarg (TRL passes rollout-output extra keys
         # through to reward_funcs exactly like tool_call_counts).
@@ -1867,6 +1883,9 @@ def _execute_trajectory(
     for t in tools:
         name = t.name if hasattr(t, "name") else t.__name__
         tool_callable_map[name] = _get_callable(t)
+    # Tools that run SQL, from their signatures (not from what the model sends):
+    # SQL rewards count only these results.
+    sql_tools = [n for n, fn in tool_callable_map.items() if _takes_sql_command(fn)]
 
     tool_schemas = []
     for t in tools:
@@ -2248,6 +2267,7 @@ def _execute_trajectory(
 
     if pre_step_hook:
         pre_step_hook(0, conversation, tools)
+    prompt_turns = list(conversation)
 
     raw_output, completion_msg, _, _ = _gen(conversation, tool_schemas)
     # Strip <think> from content before appending to conversation
@@ -2312,7 +2332,10 @@ def _execute_trajectory(
 
         # ── Execute tool calls ────────────────────────────────────────────────
         calls_to_run = []
-        unknown_calls = []
+        # One slot per call, in call order: an error for a call that cannot run,
+        # None for one that runs below. Each "tool" turn is paired with its call by
+        # position, so the order must not change.
+        tool_results: list = []
 
         for tc in tool_calls:
             tool_call_count += 1
@@ -2326,21 +2349,21 @@ def _execute_trajectory(
 
             if not name:
                 tool_failure_count += 1
-                unknown_calls.append(
+                tool_results.append(
                     (tc.get("name", "unknown"), {"error": f"Unsupported call: {tc!r}"})
                 )
                 continue
 
             if name not in tool_callable_map:
                 tool_failure_count += 1
-                unknown_calls.append((name, {"error": f"Tool '{name}' not found"}))
+                tool_results.append((name, {"error": f"Tool '{name}' not found"}))
                 continue
 
             calls_to_run.append((name, tool_callable_map[name], arguments))
+            tool_results.append(None)
 
-        tool_results: list[tuple] = unknown_calls.copy()
-        if calls_to_run:
-            tool_results.extend(_run_tools_parallel(calls_to_run))
+        ran = iter(_run_tools_parallel(calls_to_run) if calls_to_run else [])
+        tool_results = [r if r is not None else next(ran) for r in tool_results]
 
         for _, result in tool_results:
             if isinstance(result, dict) and "error" in result:
@@ -2598,7 +2621,11 @@ def _execute_trajectory(
         logprobs=list(all_logprobs),
         metadata={
             "conversation": conversation,
+            # What rewards read: folding turned tool results into user text for the
+            # model, so keep the real "tool" turns for scoring.
+            "reward_conversation": prompt_turns + completions_list if fold_tool_results else None,
             "completions_list": completions_list,
+            "sql_tools": sql_tools,
             "tool_mask": list(all_tool_mask),
             "tool_call_count": tool_call_count,
             "tool_failure_count": tool_failure_count,

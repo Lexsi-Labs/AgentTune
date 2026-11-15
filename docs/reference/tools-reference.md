@@ -197,8 +197,9 @@ trainer = create_agentic_trainer(tools=[list_tables, get_table_schema, query_fin
   `"Total Cash 2023"` → sanitized to a valid identifier). Returns a `float`, or a string
   starting with `"Error:"` on failure; never raises.
 - **`load_finqa_datasets(data_dir=..., force_download=False)`** downloads and extracts
-  `rLLM/rLLM-FinQA-Dataset` from the HF Hub and returns `(train_dataset, val_dataset)` ready
-  for `create_agentic_trainer`.
+  `rLLM/rLLM-FinQA-Dataset` from the HF Hub into `data_dir` (default `./data/data`, where the
+  FinQA table readers look) and returns `(train_dataset, val_dataset)` ready for
+  `create_agentic_trainer`.
 
 ## See also
 

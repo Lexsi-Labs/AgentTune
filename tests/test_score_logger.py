@@ -585,3 +585,29 @@ def test_scores_jsonl_trail_is_human_checkable(tmp_path, monkeypatch):
     for r in records:
         assert set(r.keys()) == {"ts", "name", "score", "reasons", "components", "meta"}
         assert r["reasons"], f"{r['name']} has no reason trail"
+
+
+# ---------------------------------------------------------------------------
+# 4. The default trail is opt-in
+# ---------------------------------------------------------------------------
+
+
+def test_default_logger_writes_nothing_unless_asked(tmp_path, monkeypatch):
+    import agenttune.utils.score_logger as sl
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("AGENTTUNE_SCORE_LOG", raising=False)
+    monkeypatch.setattr(sl, "_default_logger", None)
+    log_score("demo.reward", 1.0, reasons=["kept in memory only"])
+    assert list(tmp_path.iterdir()) == []
+    assert get_score_logger().get_last("demo.reward")["score"] == 1.0
+
+
+def test_default_logger_writes_where_the_env_var_says(tmp_path, monkeypatch):
+    import agenttune.utils.score_logger as sl
+
+    out = tmp_path / "trail" / "scores.jsonl"
+    monkeypatch.setenv("AGENTTUNE_SCORE_LOG", str(out))
+    monkeypatch.setattr(sl, "_default_logger", None)
+    log_score("demo.reward", 0.5, reasons=["opted in"])
+    assert _read_jsonl(out)[0]["score"] == 0.5

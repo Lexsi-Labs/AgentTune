@@ -6,7 +6,13 @@ from pathlib import Path
 from typing import Any
 
 # Rollout metadata that is token-level training state, not part of the record.
-_TRAINING_ONLY_METADATA = ("prompt_ids", "completion_ids", "tool_mask", "completions_list")
+_TRAINING_ONLY_METADATA = (
+    "prompt_ids",
+    "completion_ids",
+    "tool_mask",
+    "completions_list",
+    "reward_conversation",
+)
 
 
 def _portable_call(call: dict[str, Any]) -> dict[str, Any]:

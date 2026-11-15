@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import random
 from typing import Any
 
@@ -10,6 +11,12 @@ from agenttune.agentic.rewards.judges.rule_guards import RuleGuardCombinator
 from agenttune.decide.closed_loop.contracts import AgenticEvalResult
 
 logger = logging.getLogger(__name__)
+
+
+def judgment_log_path() -> str | None:
+    """Where judge verdicts are appended: `AGENTTUNE_JUDGMENT_LOG`, or the older
+    `JUDGMENTS_FILE`. None (the default) writes nothing."""
+    return os.environ.get("AGENTTUNE_JUDGMENT_LOG") or os.environ.get("JUDGMENTS_FILE") or None
 
 
 class TrajectoryEvaluator:
@@ -483,28 +490,25 @@ Return JSON EXACTLY in this schema, with NO markdown formatting:
                 final_answer = traj.get("final_answer", content)
                 clamped_score = guard(["dummy_prompt"], [final_answer], retrieved_chunks=chunks)[0]
 
-                # Append to judgments.jsonl (D1 Hook)
-                import os
-
-                judgments_file = os.environ.get(
-                    "JUDGMENTS_FILE",
-                    os.path.join(os.path.dirname(__file__), "../../../../data/judgments.jsonl"),
-                )
-                os.makedirs(os.path.dirname(judgments_file), exist_ok=True)
-                with open(judgments_file, "a") as f:
-                    f.write(
-                        json.dumps(
-                            {
-                                "trajectory_id": traj_id,
-                                "prompt": batch_messages[i],
-                                "trajectory": traj,
-                                "judge_rationale": parsed,
-                                "base_score": base_overall,
-                                "clamped_score": clamped_score,
-                            }
+                # Append to the judgment log (D1 Hook), only when one is configured.
+                judgments_file = judgment_log_path()
+                if judgments_file:
+                    judgments_dir = os.path.dirname(os.path.abspath(judgments_file))
+                    os.makedirs(judgments_dir, exist_ok=True)
+                    with open(judgments_file, "a") as f:
+                        f.write(
+                            json.dumps(
+                                {
+                                    "trajectory_id": traj_id,
+                                    "prompt": batch_messages[i],
+                                    "trajectory": traj,
+                                    "judge_rationale": parsed,
+                                    "base_score": base_overall,
+                                    "clamped_score": clamped_score,
+                                }
+                            )
+                            + "\n"
                         )
-                        + "\n"
-                    )
 
                 res = AgenticEvalResult(
                     trajectory_id=traj_id,

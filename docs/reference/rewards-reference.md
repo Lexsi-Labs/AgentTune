@@ -68,7 +68,7 @@ the list form.
 | `correctness_reward` | `sql.py` | `(completions, answer=None, **kwargs)` | Parses `*yes*`/`*no*` from the completion; `-0.5` no match, `0.6` matches `answer`, `-1.0` wrong |
 | `structure_reward` | `sql.py` | `(completions, **kwargs)` | Tool-call → tool-response → content shape: `0.1`/`0.05` if well-formed, `-0.15` if a call was made with no response, else `0.0` |
 | `query_reward` | `sql.py` | `(completions, answer=None, **kwargs)` | SQL strategy heuristic: penalizes >3 queries, `LIMIT 1`, and a missing `WHERE` or one that names no column (`where 1 = 1`); rewards a `yes`/`no` `answer` that matches whether any rows were found. Text tool output (`"[(7, 'Ana')]"`) is parsed |
-| `result_match_reward` | `sql.py` | `(completions, gold_rows=None, **kwargs)` | Opt-in. `+2.0` if the last tool result holds exactly the gold query's rows (order ignored, duplicates counted), else `-1.0`; `0.0` for an example without `gold_rows`. Pass `gold_rows` as a dataset column. Catches filters a text check cannot, such as `where customer_id > 0` |
+| `result_match_reward` | `sql.py` | `(completions, gold_rows=None, gold_sql=None, db_paths=None, sql_tools=None, **kwargs)` | Opt-in. `+2.0` if the rows of the last query that ran equal the gold rows, else `-1.0`; `0.0` for an example without `gold_rows`. Catches filters a text check cannot, such as `where customer_id > 0`. See [below](#result_match_reward-what-counts-as-a-match) |
 | `reward_correct_answer` | `sql.py` | `(completions, answer=None, **kwargs)` | Numeric match against `answer` in the final assistant message: `1.5` exact (±1e-3), `0.5` within 1%, else `0.0` |
 | `reward_tool_used` | `sql.py` | `(completions, **kwargs)` | `1.0` if any message has `role: tool`, else `0.0` |
 | `reward_concise_answer` | `sql.py` | `(completions, **kwargs)` | `0.3` if the final assistant message is ≤80 words |
@@ -92,6 +92,51 @@ the list form.
 | `finqa_calculator_grounding_reward` | `finqa.py` | `(prompts, completions, **kwargs)` | See above |
 | `finqa_placeholder_coverage_reward` | `finqa.py` | `(prompts, completions, answer=None, **kwargs)` | Unit-aware, tolerance-based version of `placeholder_coverage_reward` |
 | `finqa_answer_correctness_reward` | `finqa.py` | `(prompts, completions, answer=None, **kwargs)` | Tolerance-based comparison across *all* gold numbers, not just an exact/substring match |
+
+## `result_match_reward`: what counts as a match
+
+Pass `gold_rows` (one list of rows per example) as a dataset column; `gold_sql` and
+`db_paths` are optional columns too.
+
+- **Which result.** The last tool result that is not an error (`{'error': ...}` or text
+  starting with "Error"). A failed look-around query after the answer does not undo it;
+  a later query that ran replaces it. Each result is paired with its own call, and the query
+  is read from the call's `sql_command` argument. Only results from SQL tools count: the
+  rollout passes `sql_tools`, the names of the tools whose signature takes `sql_command`
+  (read from your code, not from what the model sends). Pass a `sql_tools` column to name
+  them yourself. Without it (a conversation you built), a result counts when its call
+  carries `sql_command`.
+- **Rows.** Compared as a multiset: row order ignored, duplicates counted. Column order is
+  ignored when one column order fits every row (2 to 6 columns). Floats compare within abs
+  1e-6 / rel 1e-9 at any depth; two ints compare exactly. A dict row compares by its values
+  in column order; lists and dicts inside a cell compare by value.
+- **Row order.** Counts only when `gold_sql` sorts at the top level (`... order by age desc`,
+  not an ORDER BY inside a subquery or `over (...)`). Without `gold_sql` it never counts.
+  Rows that tie on the sort key must then come back in gold's order too.
+- **The query must read the database.** A query that compiles on an empty SQLite database
+  reads none of your tables (`select 'Joe', 31`, `values (...)`, a CTE of literals,
+  `sqlite_master`), so its rows prove nothing and it does not match (so a question whose
+  answer is only in `sqlite_master` never matches). This uses SQLite's
+  parser; a query SQLite cannot parse (another dialect) is judged by its rows alone.
+- **Comparison databases (`db_paths`).** One database cannot tell `age >= 30` from
+  `age > 30` when nobody is 30, nor a query that reads a table but writes its rows as
+  literals (`... union all select name, age from singer where 0`). List SQLite files with
+  other data in `db_paths` and give `gold_sql`: both queries are re-run on each file and the
+  rows must match there too. The rollout's query is model-written, so files are opened
+  read-only, only reads are allowed and each query stops after 5 seconds; its result is read
+  only if it has gold's number of columns (checked before any row is computed), up to one
+  row more than gold and 4x gold's bytes (at least 4 MB), and a value over 1 MB is an error.
+  Anything past those limits is a mismatch. List the training database in `db_paths` too,
+  and the query is re-run there instead of trusting the rows the tool returned. A `gold_sql` that fails, or returns over 100,000 rows, raises `ValueError`.
+  SQLite only.
+
+### Score log
+
+Every built-in reward records why it gave its score (`agenttune.utils.score_logger`). The
+last record per reward is kept in memory (`get_score_logger().get_last(name)`). To also
+write a JSONL trail, set `AGENTTUNE_SCORE_LOG=path/to/scores.jsonl`; nothing is written to
+disk otherwise. The LLM judge's verdicts (`TrajectoryEvaluator.evaluate_batch`) work the same
+way with `AGENTTUNE_JUDGMENT_LOG=path/to/judgments.jsonl`.
 
 ## `combine_rewards(reward_funcs, weights=None)`
 

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `result_match_reward(..., gold_sql=..., db_paths=...)`, both optional dataset columns:
+  row order counts when `gold_sql` ends in a top-level ORDER BY, and `db_paths` lists SQLite
+  files on which the rollout's query and `gold_sql` must also return the same rows (#20).
+- Rollouts pass `sql_tools` to reward functions: the names of the tools whose signature takes
+  `sql_command`. `result_match_reward` counts only those tools' results (#20).
 - `agenttune train --tools read_file,list_dir`: comma-separated `ToolRegistry` names,
   passed to the trainer as `tools=`, so agentic tool-calling training runs from the CLI.
 - `result_match_reward(completions, gold_rows=...)` (opt-in, registered): `+2.0` when the last
@@ -16,11 +21,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The reward score log no longer writes `./data/scores.jsonl` in the working directory by
+  default. Set `AGENTTUNE_SCORE_LOG=path/to/scores.jsonl` to keep a trail; the last record per
+  reward is still kept in memory (`get_score_logger().get_last(name)`) (#20).
+- The LLM judge's verdict log (`TrajectoryEvaluator.evaluate_batch`) is no longer written to
+  `data/judgments.jsonl` inside the install tree by default. Set
+  `AGENTTUNE_JUDGMENT_LOG=path/to/judgments.jsonl` (the older `JUDGMENTS_FILE` still works).
+  `JudgmentHook` takes `output_file` or `AGENTTUNE_JUDGMENT_LOG` and raises `ValueError`
+  without either, instead of writing `data/judgments.jsonl` in the working directory.
+- `result_match_reward` scores the last tool result that ran (not an error), so a failed
+  look-around query after the answer no longer turns +2.0 into -1.0 (#20).
 - `ToolRegistry.auto_register_builtins()` skips names that are already registered instead of
   overwriting them, and `get()` no longer calls it.
 
 ### Fixed
 
+- Chat templates that ignore `tools` (Tiny Aya, Aya Expanse, North, Gemma 3): rollouts fold tool
+  results into user turns for the model, and reward functions got that folded conversation, with
+  no `"tool"` turn. `result_match_reward` scored every rollout -1.0, `structure_reward` scored every
+  tool call -0.15, and `query_reward` saw neither rows nor errors. Rewards now get the real tool
+  turns, for any `tool_result_format` (#20).
+- `result_match_reward` accepts the correct rows with their columns in another order
+  (`select age, name` for `select name, age`), when one column order fits every row; thanks to
+  @shro-2002 (#21).
+- `result_match_reward` gave +2.0 to a query that writes its rows itself (`select 'Joe', 31
+  union all ...`, `values (...)`, a CTE of literals, `sqlite_master`); a query that reads none
+  of the database's tables no longer matches, nor does a result from a tool that runs no SQL
+  (one that echoes its input) (#20).
+- `result_match_reward` raised `TypeError` on dict rows or on a list or dict inside a cell;
+  rows are compared in a canonical form. Floats compare within abs 1e-6 / rel 1e-9, so
+  `0.1 + 0.2` matches `0.3` (#20).
+- When one assistant turn called both a tool that could not run and one that could, each tool
+  result carried the other call's id; results now stay in call order.
+- `agenttune.agentic.events.judgment_hook` could not be imported (`agentic/events.py` shadowed
+  the `agentic/events/` folder) and was left out of the wheel. The event types moved into
+  `agentic/events/__init__.py`; `from agenttune.agentic.events import Event, EventKind, EventLog`
+  works as before.
+- `load_finqa_datasets(data_dir=...)` unpacked the download into `./data` whatever `data_dir`
+  said, then failed to find the CSVs in `data_dir`; the files now go to `data_dir`.
 - `ToolRegistry.get(name)` imports only the requested builtin's module; fetching
   `read_file` no longer raises `ImportError` when `langchain_community` isn't installed.
 - A tool registered with `register_custom()` under a builtin's name (e.g. a sandboxed

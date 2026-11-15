@@ -4,10 +4,15 @@ Add new functions here — they are auto-discovered via REWARD_REGISTRY below.
 """
 
 import ast
+import itertools
 import json
 import logging
+import math
 import re
+import sqlite3
+import time
 from collections import Counter
+from pathlib import Path
 
 from agenttune.agentic.rollout_engines.tool_call_parse import _THINK_BLOCK_RE
 from agenttune.utils.score_logger import log_score
@@ -206,17 +211,315 @@ def query_reward(completions, answer=None, **kwargs):
     return rewards
 
 
+def _canon(value):
+    """A hashable form of one cell: lists become tuples, a dict its sorted items."""
+    if isinstance(value, dict):
+        items = ((str(k), _canon(v)) for k, v in value.items())
+        return ("<dict>", *sorted(items, key=repr))
+    if isinstance(value, list | tuple):
+        return tuple(map(_canon, value))
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value
+
+
 def _row_key(row):
-    return tuple(row) if isinstance(row, list | tuple) else (row,)
+    """A row as a tuple of hashable cells. A dict row (a tool that returns records)
+    is its values in column order; gold rows carry no column names."""
+    if isinstance(row, dict):
+        row = list(row.values())
+    return tuple(map(_canon, row)) if isinstance(row, list | tuple) else (_canon(row),)
 
 
-def result_match_reward(completions, gold_rows=None, **kwargs):
-    """Opt-in: +2.0 when the last SQL tool result holds exactly the gold query's rows
-    (order ignored, duplicates counted), else -1.0.
+def _close(a, b):
+    """Equal, with float tolerance (abs 1e-6, rel 1e-9) when a float is involved;
+    two ints compare exactly. Tuples compare item by item."""
+    if isinstance(a, tuple) and isinstance(b, tuple):
+        return len(a) == len(b) and all(map(_close, a, b))
+    numbers = isinstance(a, int | float) and isinstance(b, int | float)
+    if numbers and (isinstance(a, float) or isinstance(b, float)):
+        return math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-6)
+    return a == b
+
+
+def _sort_key(value):
+    """A total order over mixed cells (None, numbers, text, bytes, tuples)."""
+    if isinstance(value, tuple):
+        return (4, tuple(map(_sort_key, value)))
+    if value is None:
+        return (0, 0)
+    if isinstance(value, int | float):
+        return (1, value)
+    if isinstance(value, str):
+        return (2, value)
+    if isinstance(value, bytes):
+        return (3, value)
+    return (5, repr(value))
+
+
+def _has_float(value) -> bool:
+    if isinstance(value, float):
+        return True
+    return isinstance(value, tuple | list) and any(map(_has_float, value))
+
+
+def _same_rows(pred, gold, ordered):
+    """Rows equal in order (`ordered`) or as a multiset, floats within tolerance."""
+    if len(pred) != len(gold):
+        return False
+    if not ordered:
+        if Counter(pred) == Counter(gold):
+            return True
+        if not (_has_float(pred) or _has_float(gold)):
+            return False  # without floats, equal means identical
+        # ponytail: pairs rows by sorting; two rows that differ only by float noise in
+        # opposite directions on an earlier column can sort apart (a false reject).
+        pred, gold = sorted(pred, key=_sort_key), sorted(gold, key=_sort_key)
+    return all(map(_close, pred, gold))
+
+
+_MAX_PERMUTED_COLUMNS = 6
+
+
+def _rows_match(pred, gold, ordered=False):
+    """Rows equal (as a multiset unless `ordered`), allowing one column permutation
+    applied to every row (`select age, name` answers `select name, age`). Permutations
+    are tried only for 2 to _MAX_PERMUTED_COLUMNS columns of equal width."""
+    pred_rows, gold_rows = list(map(_row_key, pred)), list(map(_row_key, gold))
+    if _same_rows(pred_rows, gold_rows, ordered):
+        return True
+    widths = {len(r) for r in pred_rows} | {len(r) for r in gold_rows}
+    if len(widths) != 1 or not 1 < next(iter(widths)) <= _MAX_PERMUTED_COLUMNS:
+        return False
+    n = next(iter(widths))
+    # Pair a predicted column with a gold one only when they hold the same values;
+    # ponytail: columns with identical values still try every pairing (720 at most).
+    cols_p = [[(r[j],) for r in pred_rows] for j in range(n)]
+    cols_g = [[(r[k],) for r in gold_rows] for k in range(n)]
+    same = [[_same_rows(cols_p[j], cols_g[k], ordered) for j in range(n)] for k in range(n)]
+    return any(
+        _same_rows([tuple(r[j] for j in perm) for r in pred_rows], gold_rows, ordered)
+        for perm in itertools.permutations(range(n))
+        if all(same[k][perm[k]] for k in range(n))
+    )
+
+
+def _results_with_sql(turns):
+    """(call, sql, content, tool name) per "tool" turn, in order. A result is paired with the
+    first unused call of the same tool name in the assistant turn before it (any call
+    when the turn has no name); call and sql are None when there is no such call, and
+    sql is "" for a call without `sql_command`."""
+    out, calls = [], []
+    for turn in turns:
+        if turn.get("role") == "assistant":
+            calls = list(turn.get("tool_calls") or [])
+        elif turn.get("role") == "tool":
+            name = turn.get("name")
+            call = next(
+                (c for c in calls if not name or (c.get("function") or {}).get("name") == name),
+                None,
+            )
+            if call is not None:
+                calls.remove(call)
+            fn = (call or {}).get("function") or {}
+            out.append(
+                (call, _sql_of(call) if call else None, turn.get("content"), fn.get("name") or name)
+            )
+    return out
+
+
+def _is_error(content) -> bool:
+    """A failed call: an `{'error': ...}` result or text starting with "Error"."""
+    out = _tool_output(content)
+    if isinstance(out, dict):
+        return "error" in out
+    return isinstance(content, str) and content.lstrip().lower().startswith("error")
+
+
+def _reads_no_table(sql: str):
+    """True when `sql` compiles on an empty SQLite database, so it reads none of the
+    user's tables: literals, VALUES, CTEs of literals, sqlite_master, pragma functions.
+    False when it names a table an empty database lacks. None when SQLite cannot tell
+    (another SQL dialect, a syntax error, several statements)."""
+    con = sqlite3.connect(":memory:")
+    try:
+        con.execute("EXPLAIN " + sql)  # compiles, never runs
+        return True
+    except sqlite3.Error as e:
+        return False if "no such table" in str(e) else None
+    except Exception:
+        return None
+    finally:
+        con.close()
+
+
+# Strings, quoted identifiers and comments, earliest first, so none hides inside another.
+_SQL_NOISE_RE = re.compile(
+    r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|--[^\n]*|/\*.*?(?:\*/|\Z)", re.DOTALL
+)
+
+
+def _has_top_level_order_by(sql: str) -> bool:
+    """True when the query itself sorts its rows: ORDER BY outside any parentheses
+    (not in a subquery or `over (...)`), strings or comments."""
+    depth, top = 0, []
+    for ch in _SQL_NOISE_RE.sub(" ", sql):
+        depth += (ch == "(") - (ch == ")")
+        top.append(ch if depth == 0 and ch != ")" else " ")
+    return re.search(r"\border\s+by\b", "".join(top), re.IGNORECASE) is not None
+
+
+_QUERY_SECONDS = 5.0
+_MAX_VALUE_BYTES = 1_000_000  # one string or blob in the rollout's query
+_MIN_BYTE_BUDGET = 4_000_000
+_MAX_GOLD_ROWS = 100_000
+_READ_ACTIONS = {
+    sqlite3.SQLITE_SELECT,
+    sqlite3.SQLITE_READ,
+    sqlite3.SQLITE_FUNCTION,
+    sqlite3.SQLITE_RECURSIVE,
+}
+
+
+class _TooMuch(Exception):
+    pass
+
+
+def _size(value) -> int:
+    if isinstance(value, str | bytes):
+        return len(value) + 8
+    if isinstance(value, tuple | list):
+        return sum(map(_size, value)) + 8
+    return 8
+
+
+def _run_read_only(path, sql: str, like=None):
+    """(rows, number of columns) of `sql` on the SQLite file at `path`, opened read-only
+    with reads only allowed and a _QUERY_SECONDS limit. Without `like` (gold_sql), more
+    than _MAX_GOLD_ROWS rows raise _TooMuch.
+
+    With `like=(rows, columns)` from gold_sql on this file, the query is the rollout's
+    and is bounded by gold: its column count is checked before any row is computed,
+    a value over _MAX_VALUE_BYTES fails, and one row more than gold or more than 4x
+    gold's bytes (at least _MIN_BYTE_BUDGET) raises _TooMuch before the rest is read."""
+    con = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        con.set_authorizer(
+            lambda action, *_: sqlite3.SQLITE_OK if action in _READ_ACTIONS else sqlite3.SQLITE_DENY
+        )
+        deadline = time.monotonic() + _QUERY_SECONDS
+        con.set_progress_handler(lambda: time.monotonic() > deadline, 10_000)
+        if like is None:
+            cur = con.execute(sql)
+            rows = cur.fetchmany(_MAX_GOLD_ROWS + 1)
+            if len(rows) > _MAX_GOLD_ROWS:
+                raise _TooMuch(f"over {_MAX_GOLD_ROWS} rows")
+            return rows, len(cur.description or ())
+        want, columns = like
+        con.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, _MAX_VALUE_BYTES)
+        # LIMIT 0 compiles the query and names its columns without computing a row.
+        # ponytail: not SQLITE_LIMIT_COLUMN, which also rejects reading a wider table.
+        body = sql.strip().rstrip(";")
+        probe = con.execute(f"select * from (\n{body}\n) limit 0")
+        if len(probe.description or ()) != columns:
+            raise _TooMuch("another number of columns than gold_sql")
+        budget, rows = max(4 * _size(want), _MIN_BYTE_BUDGET), []
+        for row in con.execute(body):
+            rows.append(row)
+            budget -= _size(row)
+            if len(rows) > len(want):
+                raise _TooMuch("more rows than gold_sql")
+            if budget < 0:
+                raise _TooMuch("more data than gold_sql")
+        return rows, columns
+    finally:
+        con.close()
+
+
+def _match(turns, gold, gold_sql=None, db_paths=(), sql_tools=None):
+    """(score, reason) for one example's turns against its gold rows."""
+    if db_paths and not gold_sql:
+        raise ValueError("result_match_reward: db_paths needs gold_sql for the same example")
+    results = _results_with_sql(turns)
+    if not results:
+        return -1.0, "no tool result -> -1.0"
+    # Only a SQL tool's result is a query result: an echo tool returns what it is
+    # given. With `sql_tools` (the rollout passes the tools that take `sql_command`)
+    # the tool's name decides; without it, a call that carries `sql_command`, or a
+    # tool turn with no call at all (a hand-built conversation), counts.
+    ran = [
+        (sql, content)
+        for call, sql, content, name in results
+        if not _is_error(content)
+        and (name in sql_tools if sql_tools is not None else call is None or sql)
+    ]
+    if not ran:
+        return -1.0, "no query ran (every call failed or ran no SQL) -> -1.0"
+    sql, content = ran[-1]
+    ordered = bool(gold_sql) and _has_top_level_order_by(gold_sql)
+    rows = _tool_output(content)
+    if not isinstance(rows, list) or not _rows_match(rows, gold, ordered):
+        return -1.0, "last result that ran differs from the gold rows -> -1.0"
+    if sql and _reads_no_table(sql):
+        return -1.0, "the query reads no table; its rows are written in the query -> -1.0"
+    for path in db_paths:
+        if not sql:
+            return -1.0, "no query to re-run on the comparison databases -> -1.0"
+        try:
+            want = _run_read_only(path, gold_sql)  # (rows, columns)
+        except (sqlite3.Error, _TooMuch) as e:
+            raise ValueError(f"result_match_reward: gold_sql failed on {path}: {e}") from e
+        try:
+            got = _run_read_only(path, sql, like=want)
+        except _TooMuch as e:
+            return -1.0, f"the query returns {e} on {path} -> -1.0"
+        except sqlite3.Error as e:
+            return -1.0, f"the query fails on comparison database {path} ({e}) -> -1.0"
+        if not _rows_match(got[0], want[0], ordered):
+            return -1.0, f"the query differs from gold_sql on comparison database {path} -> -1.0"
+    return 2.0, "last result that ran equals the gold rows -> +2.0"
+
+
+def _per_example(column, i):
+    """Item `i` of a per-example column, as a set of names (None when absent)."""
+    value = column[i] if column is not None and i < len(column) else None
+    return None if value is None else {value} if isinstance(value, str) else set(value)
+
+
+def result_match_reward(
+    completions, gold_rows=None, gold_sql=None, db_paths=None, sql_tools=None, **kwargs
+):
+    """Opt-in: +2.0 when the rows of the last query that ran equal the gold query's
+    rows (row order ignored, duplicates counted, column order ignored, floats within
+    abs 1e-6 / rel 1e-9; a dict row compares by its values), else -1.0.
+
+    "Last query that ran" is the last tool result that is not an error: a failed
+    look-around query after the answer does not undo it, a later query that ran does.
+    A query that reads no table (literals, VALUES, sqlite_master) never matches; this
+    check uses SQLite's parser, and a query it cannot parse is judged by its rows.
 
     `gold_rows` is one list of rows per example, e.g. a dataset column TRL passes in.
     A text check of the query cannot tell `where customer_id > 0` from the real
     filter; comparing the rows can. Examples without gold rows score 0.0.
+
+    Optional, per example (dataset columns too):
+      `gold_sql`: the gold query. When it ends in a top-level ORDER BY, row order
+        counts; otherwise it does not. Without it, row order never counts.
+      `db_paths`: SQLite files to re-run both queries on (needs `gold_sql`). The
+        rows must match on each one as well. One database cannot tell
+        `age >= 30` from `age > 30` when nobody is 30, nor a query that reads a
+        table but writes its rows in literals; a database with other data can.
+        Files are opened read-only, only reads are allowed and each query stops
+        after 5 seconds. The rollout's query is read only while it has gold's number
+        of columns, at most one row more than gold, and at most 4x gold's bytes
+        (at least 4 MB), and a value over 1 MB is an error. List the training
+        database too, and the query is re-run there instead of trusting the rows
+        the tool returned.
+      `sql_tools`: names of the tools that run SQL; only their results count.
+        Rollouts pass it (the tools that take a `sql_command` argument). Without
+        it, a result counts when its call carries `sql_command`.
     """
     rewards = []
     for i, completion in enumerate(completions):
@@ -224,20 +527,14 @@ def result_match_reward(completions, gold_rows=None, **kwargs):
         if gold is None:
             score, reason = 0.0, "no gold_rows for this example -> 0.0"
         else:
-            results = [
-                turn.get("content")
-                for turn in _turns(completion, i, kwargs)
-                if turn.get("role") == "tool"
-            ]
-            last = _tool_output(results[-1]) if results else None
-            if isinstance(last, list) and Counter(map(_row_key, last)) == Counter(
-                map(_row_key, gold)
-            ):
-                score, reason = 2.0, "last tool result equals the gold rows -> +2.0"
-            elif not results:
-                score, reason = -1.0, "no tool result -> -1.0"
-            else:
-                score, reason = -1.0, "last tool result differs from the gold rows -> -1.0"
+            paths = db_paths[i] if db_paths is not None and i < len(db_paths) else None
+            score, reason = _match(
+                _turns(completion, i, kwargs),
+                gold,
+                gold_sql[i] if gold_sql is not None and i < len(gold_sql) else None,
+                [paths] if isinstance(paths, str) else paths or (),
+                _per_example(sql_tools, i),
+            )
         log_score("sql.result_match_reward", score, reasons=[reason], meta={"index": i})
         rewards.append(score)
     return rewards
