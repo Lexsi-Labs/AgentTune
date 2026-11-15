@@ -226,9 +226,15 @@ def _rows_match(pred, gold):
     if len(widths) != 1 or not 1 < next(iter(widths)) <= _MAX_PERMUTED_COLUMNS:
         return False
     n = next(iter(widths))
+    # Pair a predicted column with a gold one only when they hold the same values;
+    # ponytail: columns with identical values still try every pairing (720 at most).
+    cols_p = [Counter(r[j] for r in pred_rows) for j in range(n)]
+    cols_g = [Counter(r[k] for r in gold_counts.elements()) for k in range(n)]
+    same = [[cols_p[j] == cols_g[k] for j in range(n)] for k in range(n)]
     return any(
         Counter(tuple(r[j] for j in perm) for r in pred_rows) == gold_counts
         for perm in itertools.permutations(range(n))
+        if all(same[k][perm[k]] for k in range(n))
     )
 
 
