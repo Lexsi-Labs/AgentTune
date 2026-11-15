@@ -1354,7 +1354,9 @@ def _wrap_reward_fn(reward_fn: Callable) -> Callable:
         prompt_texts = []
         extra_cols: dict[str, list] = {}
         for t, resp, p in zip(trajectories, responses, prompts, strict=False):
-            conv = (t.metadata or {}).get("conversation")
+            conv = (t.metadata or {}).get("reward_conversation") or (t.metadata or {}).get(
+                "conversation"
+            )
             msgs = conv or (t.to_trl_format().get("messages") or [])
             # Score what the model generated: the turns from its first reply on,
             # not the system/user prompt. The single-turn path records only the
@@ -1464,7 +1466,12 @@ def _format_for_grpo(
         "trajectories": trajectories,
         "tools_used": tools_enabled,
         "conversations": [
-            t.metadata.get("conversation", []) if t.metadata else [] for t in trajectories
+            (
+                (t.metadata.get("reward_conversation") or t.metadata.get("conversation", []))
+                if t.metadata
+                else []
+            )
+            for t in trajectories
         ],
         "tool_call_counts": [
             t.metadata.get("tool_call_count", 0) if t.metadata else 0 for t in trajectories
@@ -2248,6 +2255,7 @@ def _execute_trajectory(
 
     if pre_step_hook:
         pre_step_hook(0, conversation, tools)
+    prompt_turns = list(conversation)
 
     raw_output, completion_msg, _, _ = _gen(conversation, tool_schemas)
     # Strip <think> from content before appending to conversation
@@ -2598,6 +2606,9 @@ def _execute_trajectory(
         logprobs=list(all_logprobs),
         metadata={
             "conversation": conversation,
+            # What rewards read: folding turned tool results into user text for the
+            # model, so keep the real "tool" turns for scoring.
+            "reward_conversation": prompt_turns + completions_list if fold_tool_results else None,
             "completions_list": completions_list,
             "tool_mask": list(all_tool_mask),
             "tool_call_count": tool_call_count,
