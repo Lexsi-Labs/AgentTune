@@ -211,30 +211,7 @@ def _row_key(row):
     return tuple(row) if isinstance(row, list | tuple) else (row,)
 
 
-# A tool result that the rollout folded into a user turn (rollout_factory's default
-# tool_result_format), as it does for chat templates that ignore `tools` (Tiny Aya,
-# Aya Expanse, North, Gemma 3). Without this such rollouts have no "tool" turn at all.
-_FOLDED_RESULT_RE = re.compile(
-    r"\ATool result for [^:\n]*: (.*?)(?:\nUse this result to answer the original question\.)?\Z",
-    re.DOTALL,
-)
 _MAX_PERMUTED_COLUMNS = 6
-
-
-def _tool_results(turns):
-    """Tool result contents in order: "tool" turns, plus results folded into user turns
-    (consecutive results are merged into one user turn, separated by a blank line)."""
-    out = []
-    for turn in turns:
-        content = turn.get("content")
-        if turn.get("role") == "tool":
-            out.append(content)
-        elif turn.get("role") == "user" and isinstance(content, str):
-            for part in content.split("\n\n"):
-                m = _FOLDED_RESULT_RE.match(part)
-                if m:
-                    out.append(m.group(1))
-    return out
 
 
 def _rows_match(pred, gold):
@@ -261,8 +238,7 @@ def result_match_reward(completions, gold_rows=None, **kwargs):
 
     `gold_rows` is one list of rows per example, e.g. a dataset column TRL passes in.
     A text check of the query cannot tell `where customer_id > 0` from the real
-    filter; comparing the rows can. Tool results folded into user turns (templates
-    that ignore `tools`) are read too. Examples without gold rows score 0.0.
+    filter; comparing the rows can. Examples without gold rows score 0.0.
     """
     rewards = []
     for i, completion in enumerate(completions):
@@ -270,7 +246,11 @@ def result_match_reward(completions, gold_rows=None, **kwargs):
         if gold is None:
             score, reason = 0.0, "no gold_rows for this example -> 0.0"
         else:
-            results = _tool_results(_turns(completion, i, kwargs))
+            results = [
+                turn.get("content")
+                for turn in _turns(completion, i, kwargs)
+                if turn.get("role") == "tool"
+            ]
             last = _tool_output(results[-1]) if results else None
             if isinstance(last, list) and _rows_match(last, gold):
                 score, reason = 2.0, "last tool result equals the gold rows -> +2.0"
