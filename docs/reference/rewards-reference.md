@@ -135,7 +135,8 @@ Pass `gold_rows` (one list of rows per example) as a dataset column; `gold_sql` 
 Every built-in reward records why it gave its score (`agenttune.utils.score_logger`). The
 last record per reward is kept in memory (`get_score_logger().get_last(name)`). To also
 write a JSONL trail, set `AGENTTUNE_SCORE_LOG=path/to/scores.jsonl`; nothing is written to
-disk otherwise.
+disk otherwise. The LLM judge's verdicts (`TrajectoryEvaluator.evaluate_batch`) work the same
+way with `AGENTTUNE_JUDGMENT_LOG=path/to/judgments.jsonl`.
 
 ## `combine_rewards(reward_funcs, weights=None)`
 

@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The reward score log no longer writes `./data/scores.jsonl` in the working directory by
   default. Set `AGENTTUNE_SCORE_LOG=path/to/scores.jsonl` to keep a trail; the last record per
   reward is still kept in memory (`get_score_logger().get_last(name)`) (#20).
+- The LLM judge's verdict log (`TrajectoryEvaluator.evaluate_batch`) is no longer written to
+  `data/judgments.jsonl` inside the install tree by default. Set
+  `AGENTTUNE_JUDGMENT_LOG=path/to/judgments.jsonl` (the older `JUDGMENTS_FILE` still works).
+  `JudgmentHook` takes `output_file` or `AGENTTUNE_JUDGMENT_LOG` and raises `ValueError`
+  without either, instead of writing `data/judgments.jsonl` in the working directory.
 - `result_match_reward` scores the last tool result that ran (not an error), so a failed
   look-around query after the answer no longer turns +2.0 into -1.0 (#20).
 - `ToolRegistry.auto_register_builtins()` skips names that are already registered instead of
@@ -48,6 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `0.1 + 0.2` matches `0.3` (#20).
 - When one assistant turn called both a tool that could not run and one that could, each tool
   result carried the other call's id; results now stay in call order.
+- `load_finqa_datasets(data_dir=...)` unpacked the download into `./data` whatever `data_dir`
+  said, then failed to find the CSVs in `data_dir`; the files now go to `data_dir`.
 - `ToolRegistry.get(name)` imports only the requested builtin's module; fetching
   `read_file` no longer raises `ImportError` when `langchain_community` isn't installed.
 - A tool registered with `register_custom()` under a builtin's name (e.g. a sandboxed

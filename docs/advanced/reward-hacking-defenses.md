@@ -84,9 +84,10 @@ The "base judge function" passed in here is a one-line lambda that just returns 
 LLM already gave. `RuleGuardCombinator` is being used purely for its clamping side effect on
 a single already-computed score, not to combine multiple judges. `clamped_score` (not the raw
 `base_overall`) is what ends up as `AgenticEvalResult.overall_judge_score`. This same call
-site also writes both the raw and clamped score to a `judgments.jsonl` file (path from the
-`JUDGMENTS_FILE` env var, defaulting under `data/`); the source labels this "D1 Hook", so
-you can audit, after the fact, exactly which trajectories got clamped and by how much.
+site can also write both the raw and clamped score to a JSONL file: set
+`AGENTTUNE_JUDGMENT_LOG=path/to/judgments.jsonl` (the older `JUDGMENTS_FILE` still works).
+Nothing is written without it. The source labels this "D1 Hook", so with the log on you can
+audit, after the fact, exactly which trajectories got clamped and by how much.
 
 ### The single-trajectory path does not clamp
 
@@ -295,7 +296,8 @@ phrasing, rather than overfitting to one prompt's specific wording or ordering.
 purpose. It's a real dataclass field on `AgenticEvalResult` (`decide/closed_loop/contracts.py`,
 comment: `# For prompt rotation tracking`), and `JudgmentHook.log_judgment`
 (`agentic/events/judgment_hook.py`) writes it alongside the judge's verdict into a persistent
-`judgments.jsonl`, the same "D1 Hook" pattern `evaluate_batch` uses directly. Having the
+JSONL file (its `output_file`, or `AGENTTUNE_JUDGMENT_LOG`), the same "D1 Hook" pattern
+`evaluate_batch` uses directly. Having the
 rotation id on every logged judgment means you can later slice the log by which prompt
 variant produced which score and check whether a policy's apparent improvement holds up
 across all three phrasings or is concentrated on one, a real, checkable signal that the
