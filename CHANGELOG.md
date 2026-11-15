@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Chat templates that ignore `tools` (Tiny Aya, Aya Expanse, North, Gemma 3): rollouts fold tool
+  results into user turns for the model, and reward functions got that folded conversation, with
+  no `"tool"` turn. `result_match_reward` scored every rollout -1.0, `structure_reward` scored every
+  tool call -0.15, and `query_reward` saw neither rows nor errors. Rewards now get the real tool
+  turns, for any `tool_result_format` (#20).
+- `result_match_reward` accepts the correct rows with their columns in another order
+  (`select age, name` for `select name, age`), when one column order fits every row; thanks to
+  @shro-2002 (#21).
 - `ToolRegistry.get(name)` imports only the requested builtin's module; fetching
   `read_file` no longer raises `ImportError` when `langchain_community` isn't installed.
 - A tool registered with `register_custom()` under a builtin's name (e.g. a sandboxed
