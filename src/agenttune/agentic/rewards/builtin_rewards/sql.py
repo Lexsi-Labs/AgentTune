@@ -7,6 +7,7 @@ import ast
 import itertools
 import json
 import logging
+import math
 import re
 from collections import Counter
 
@@ -207,32 +208,88 @@ def query_reward(completions, answer=None, **kwargs):
     return rewards
 
 
+def _canon(value):
+    """A hashable form of one cell: lists become tuples, a dict its sorted items."""
+    if isinstance(value, dict):
+        items = ((str(k), _canon(v)) for k, v in value.items())
+        return ("<dict>", *sorted(items, key=repr))
+    if isinstance(value, list | tuple):
+        return tuple(map(_canon, value))
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value
+
+
 def _row_key(row):
-    return tuple(row) if isinstance(row, list | tuple) else (row,)
+    """A row as a tuple of hashable cells. A dict row (a tool that returns records)
+    is its values in column order; gold rows carry no column names."""
+    if isinstance(row, dict):
+        row = list(row.values())
+    return tuple(map(_canon, row)) if isinstance(row, list | tuple) else (_canon(row),)
+
+
+def _close(a, b):
+    """Equal, with float tolerance (abs 1e-6, rel 1e-9) when a float is involved;
+    two ints compare exactly. Tuples compare item by item."""
+    if isinstance(a, tuple) and isinstance(b, tuple):
+        return len(a) == len(b) and all(map(_close, a, b))
+    numbers = isinstance(a, int | float) and isinstance(b, int | float)
+    if numbers and (isinstance(a, float) or isinstance(b, float)):
+        return math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-6)
+    return a == b
+
+
+def _sort_key(value):
+    """A total order over mixed cells (None, numbers, text, bytes, tuples)."""
+    if isinstance(value, tuple):
+        return (4, tuple(map(_sort_key, value)))
+    if value is None:
+        return (0, 0)
+    if isinstance(value, int | float):
+        return (1, value)
+    if isinstance(value, str):
+        return (2, value)
+    if isinstance(value, bytes):
+        return (3, value)
+    return (5, repr(value))
+
+
+def _same_rows(pred, gold, ordered):
+    """Rows equal in order (`ordered`) or as a multiset, floats within tolerance."""
+    if len(pred) != len(gold):
+        return False
+    if not ordered:
+        if Counter(pred) == Counter(gold):
+            return True
+        # ponytail: pairs rows by sorting; two rows that differ only by float noise in
+        # opposite directions on an earlier column can sort apart (a false reject).
+        pred, gold = sorted(pred, key=_sort_key), sorted(gold, key=_sort_key)
+    return all(map(_close, pred, gold))
 
 
 _MAX_PERMUTED_COLUMNS = 6
 
 
-def _rows_match(pred, gold):
-    """Rows equal as a multiset, allowing one column permutation applied to every row
-    (`select age, name` answers `select name, age`). Permutations are tried only for
-    2 to _MAX_PERMUTED_COLUMNS columns of equal width."""
-    gold_counts = Counter(map(_row_key, gold))
-    pred_rows = [_row_key(r) for r in pred]
-    if Counter(pred_rows) == gold_counts:
+def _rows_match(pred, gold, ordered=False):
+    """Rows equal (as a multiset unless `ordered`), allowing one column permutation
+    applied to every row (`select age, name` answers `select name, age`). Permutations
+    are tried only for 2 to _MAX_PERMUTED_COLUMNS columns of equal width."""
+    pred_rows, gold_rows = list(map(_row_key, pred)), list(map(_row_key, gold))
+    if _same_rows(pred_rows, gold_rows, ordered):
         return True
-    widths = {len(r) for r in pred_rows} | {len(r) for r in gold_counts}
+    widths = {len(r) for r in pred_rows} | {len(r) for r in gold_rows}
     if len(widths) != 1 or not 1 < next(iter(widths)) <= _MAX_PERMUTED_COLUMNS:
         return False
     n = next(iter(widths))
     # Pair a predicted column with a gold one only when they hold the same values;
     # ponytail: columns with identical values still try every pairing (720 at most).
-    cols_p = [Counter(r[j] for r in pred_rows) for j in range(n)]
-    cols_g = [Counter(r[k] for r in gold_counts.elements()) for k in range(n)]
-    same = [[cols_p[j] == cols_g[k] for j in range(n)] for k in range(n)]
+    cols_p = [[(r[j],) for r in pred_rows] for j in range(n)]
+    cols_g = [[(r[k],) for r in gold_rows] for k in range(n)]
+    same = [[_same_rows(cols_p[j], cols_g[k], ordered) for j in range(n)] for k in range(n)]
     return any(
-        Counter(tuple(r[j] for j in perm) for r in pred_rows) == gold_counts
+        _same_rows([tuple(r[j] for j in perm) for r in pred_rows], gold_rows, ordered)
         for perm in itertools.permutations(range(n))
         if all(same[k][perm[k]] for k in range(n))
     )
@@ -240,7 +297,8 @@ def _rows_match(pred, gold):
 
 def result_match_reward(completions, gold_rows=None, **kwargs):
     """Opt-in: +2.0 when the last SQL tool result holds exactly the gold query's rows
-    (row order ignored, duplicates counted, column order ignored), else -1.0.
+    (row order ignored, duplicates counted, column order ignored, floats within abs 1e-6 /
+    rel 1e-9; a dict row compares by its values), else -1.0.
 
     `gold_rows` is one list of rows per example, e.g. a dataset column TRL passes in.
     A text check of the query cannot tell `where customer_id > 0` from the real
