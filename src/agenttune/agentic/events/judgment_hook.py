@@ -15,10 +15,12 @@ class JudgmentHook:
     persistent JSONL file for distilling the small Reward Model later.
     """
 
-    def __init__(self, output_file: str = "data/judgments.jsonl"):
-        self.output_file = output_file
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(self.output_file), exist_ok=True)
+    def __init__(self, output_file: str | None = None):
+        # No default file: a path in the working directory is a surprise.
+        self.output_file = output_file or os.environ.get("AGENTTUNE_JUDGMENT_LOG")
+        if not self.output_file:
+            raise ValueError("JudgmentHook needs output_file or AGENTTUNE_JUDGMENT_LOG")
+        os.makedirs(os.path.dirname(os.path.abspath(self.output_file)), exist_ok=True)
 
     def log_judgment(self, trajectory: dict[str, Any], eval_result: AgenticEvalResult):
         """
