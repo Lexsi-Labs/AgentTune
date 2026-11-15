@@ -3,10 +3,11 @@ where it did, not just the number.
 
 Every reward or eval function builds up a small `reasons: list[str]` as it
 evaluates its conditions (e.g. "no verdict found -> 0.0", "confidence=high ->
-+0.3") and calls `log_score(...)` right before each `return`. Output is an
-always-on JSONL trail (same convention as `agentic.events.judgment_hook`) plus
-an optional forward to an existing `LoggingManager` (W&B/TensorBoard) for
-scalar tracking across steps.
++0.3") and calls `log_score(...)` right before each `return`. The last record
+per name is kept in memory (`get_last`). A JSONL trail is opt-in: set
+`AGENTTUNE_SCORE_LOG=path/to/scores.jsonl`, or pass `output_file` to your own
+`ScoreLogger`. Records can also be forwarded to an existing `LoggingManager`
+(W&B/TensorBoard) for scalar tracking across steps.
 """
 
 import json
@@ -18,13 +19,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_PATH = os.environ.get("AGENTTUNE_SCORE_LOG", "data/scores.jsonl")
-
 
 class ScoreLogger:
     """Records a score plus the human-readable trail of why it has that value."""
 
-    def __init__(self, output_file: str = _DEFAULT_PATH, logging_manager: Any | None = None):
+    def __init__(self, output_file: str | None = None, logging_manager: Any | None = None):
         self.output_file = output_file
         self.logging_manager = logging_manager
         self._lock = threading.Lock()
@@ -52,14 +51,8 @@ class ScoreLogger:
         }
         self._last[name] = record
 
-        try:
-            out_dir = os.path.dirname(os.path.abspath(self.output_file))
-            if out_dir:
-                os.makedirs(out_dir, exist_ok=True)
-            with self._lock, open(self.output_file, "a") as f:
-                f.write(json.dumps(record, default=str) + "\n")
-        except Exception as e:
-            logger.warning(f"ScoreLogger failed to write '{name}': {e}")
+        if self.output_file:
+            self._write(name, record)
 
         if reasons:
             logger.debug(f"[{name}] score={score}: " + " | ".join(reasons))
@@ -69,6 +62,16 @@ class ScoreLogger:
                 self.logging_manager.log_metrics({name: score}, step=step)
             except Exception as e:
                 logger.warning(f"ScoreLogger forward to LoggingManager failed for '{name}': {e}")
+
+    def _write(self, name: str, record: dict[str, Any]) -> None:
+        try:
+            out_dir = os.path.dirname(os.path.abspath(self.output_file))
+            if out_dir:
+                os.makedirs(out_dir, exist_ok=True)
+            with self._lock, open(self.output_file, "a") as f:
+                f.write(json.dumps(record, default=str) + "\n")
+        except Exception as e:
+            logger.warning(f"ScoreLogger failed to write '{name}': {e}")
 
     def get_last(self, name: str) -> dict[str, Any] | None:
         """Most recent record logged under `name` (mirrors the old per-file
@@ -81,12 +84,13 @@ _default_lock = threading.Lock()
 
 
 def get_score_logger() -> ScoreLogger:
-    """Process-wide default ScoreLogger (JSONL only, no LoggingManager)."""
+    """Process-wide default ScoreLogger. It writes a JSONL trail only when
+    `AGENTTUNE_SCORE_LOG` names a file (read when the logger is first used)."""
     global _default_logger
     if _default_logger is None:
         with _default_lock:
             if _default_logger is None:
-                _default_logger = ScoreLogger()
+                _default_logger = ScoreLogger(os.environ.get("AGENTTUNE_SCORE_LOG") or None)
     return _default_logger
 
 
