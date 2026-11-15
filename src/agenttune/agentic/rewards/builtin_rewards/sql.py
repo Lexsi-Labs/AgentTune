@@ -360,6 +360,8 @@ def _has_top_level_order_by(sql: str) -> bool:
 
 
 _QUERY_SECONDS = 5.0
+_MAX_VALUE_BYTES = 1_000_000  # one string or blob
+_MAX_GOLD_ROWS = 100_000
 _READ_ACTIONS = {
     sqlite3.SQLITE_SELECT,
     sqlite3.SQLITE_READ,
@@ -368,17 +370,27 @@ _READ_ACTIONS = {
 }
 
 
-def _run_read_only(path, sql: str) -> list:
+class _TooManyRows(Exception):
+    pass
+
+
+def _run_read_only(path, sql: str, max_rows: int) -> list:
     """Rows of `sql` on the SQLite file at `path`. The query is model-written: the file
-    is opened read-only, only reads are allowed, and it is stopped after _QUERY_SECONDS."""
+    is opened read-only, only reads are allowed, no value may exceed _MAX_VALUE_BYTES,
+    the query stops after _QUERY_SECONDS, and more than `max_rows` rows raise
+    _TooManyRows without fetching the rest."""
     con = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
     try:
+        con.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, _MAX_VALUE_BYTES)
         con.set_authorizer(
             lambda action, *_: sqlite3.SQLITE_OK if action in _READ_ACTIONS else sqlite3.SQLITE_DENY
         )
         deadline = time.monotonic() + _QUERY_SECONDS
         con.set_progress_handler(lambda: time.monotonic() > deadline, 10_000)
-        return con.execute(sql).fetchall()
+        rows = con.execute(sql).fetchmany(max_rows + 1)
+        if len(rows) > max_rows:
+            raise _TooManyRows
+        return rows
     finally:
         con.close()
 
@@ -404,11 +416,14 @@ def _match(turns, gold, gold_sql=None, db_paths=()):
         if not sql:
             return -1.0, "no query to re-run on the comparison databases -> -1.0"
         try:
-            want = _run_read_only(path, gold_sql)
-        except sqlite3.Error as e:
-            raise ValueError(f"result_match_reward: gold_sql failed on {path}: {e}") from e
+            want = _run_read_only(path, gold_sql, _MAX_GOLD_ROWS)
+        except (sqlite3.Error, _TooManyRows) as e:
+            raise ValueError(f"result_match_reward: gold_sql failed on {path}: {e!r}") from e
         try:
-            got = _run_read_only(path, sql)
+            # One row more than gold is enough to tell a mismatch.
+            got = _run_read_only(path, sql, len(want))
+        except _TooManyRows:
+            return -1.0, f"the query returns more rows than gold_sql on {path} -> -1.0"
         except sqlite3.Error as e:
             return -1.0, f"the query fails on comparison database {path} ({e}) -> -1.0"
         if not _rows_match(got, want, ordered):
@@ -437,7 +452,9 @@ def result_match_reward(completions, gold_rows=None, gold_sql=None, db_paths=Non
         rows must match on each one as well. One database cannot tell
         `age >= 30` from `age > 30` when nobody is 30, nor a query that reads a
         table but writes its rows in literals; a database with other data can.
-        Files are opened read-only and each query is stopped after 5 seconds.
+        Files are opened read-only, only reads are allowed, each query stops after
+        5 seconds, a value over 1 MB is an error, and the rollout's query is read
+        only up to one row more than gold_sql returns.
     """
     rewards = []
     for i, completion in enumerate(completions):

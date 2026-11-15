@@ -203,3 +203,28 @@ def test_row_order_counts_when_gold_orders(gold_sql, expected):
 )
 def test_top_level_order_by(sql, ordered):
     assert R._has_top_level_order_by(sql) is ordered
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # 2 x 10^7 rows
+        "select s.name, s.age from singer s, (with recursive c(x) as (select 1 union all "
+        "select x + 1 from c where x < 10000000) select x from c) where s.age > 30",
+        "select name, zeroblob(1000000000) from singer where age > 30",
+        "select name, printf('%.*c', 1000000000, 'x') from singer where age > 30",
+    ],
+)
+def test_huge_results_stop_early(dbs, sql):
+    import resource
+    import sys
+    import time
+
+    def peak_kib():
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return peak / 1024 if sys.platform == "darwin" else peak
+
+    before, start = peak_kib(), time.perf_counter()
+    assert score(turns((sql, GOLD)), gold_sql=[GOLD_SQL], db_paths=[dbs]) == -1.0
+    assert time.perf_counter() - start < 2.0
+    assert peak_kib() - before < 100 * 1024  # under 100 MiB

@@ -115,8 +115,11 @@ Pass `gold_rows` (one list of rows per example) as a dataset column; `gold_sql` 
   `age > 30` when nobody is 30, nor a query that reads a table but writes its rows as
   literals (`... union all select name, age from singer where 0`). List SQLite files with
   other data in `db_paths` and give `gold_sql`: both queries are re-run on each file and the
-  rows must match there too. Files are opened read-only, only reads are allowed, and each
-  query stops after 5 seconds. A `gold_sql` that fails raises `ValueError`. SQLite only.
+  rows must match there too. The rollout's query is model-written, so files are opened
+  read-only, only reads are allowed, each query stops after 5 seconds, a value over 1 MB is an
+  error, and the query is read only up to one row more than `gold_sql` returns (more is a
+  mismatch). A `gold_sql` that fails, or returns over 100,000 rows, raises `ValueError`.
+  SQLite only.
 
 ### Score log
 
