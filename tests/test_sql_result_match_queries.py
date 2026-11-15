@@ -205,17 +205,53 @@ def test_top_level_order_by(sql, ordered):
     assert R._has_top_level_order_by(sql) is ordered
 
 
+def test_rows_from_a_tool_that_runs_no_sql_do_not_match():
+    # echo(text) hands back whatever the model wrote; its rows prove nothing.
+    rows = "[('Joe', 31), ('Ann', 45)]"
+    conv = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"function": {"name": "echo", "arguments": {"text": rows}}}],
+        },
+        {"role": "tool", "name": "echo", "content": rows},
+    ]
+    assert score(conv) == -1.0
+    assert score(turns((GOOD, GOLD)) + conv) == 2.0  # the SQL result before it still counts
+
+
+def last_reason():
+    from agenttune.utils.score_logger import get_score_logger
+
+    return get_score_logger().get_last("sql.result_match_reward")["reasons"][0]
+
+
+WIDE = ", ".join(f"printf('%.*c', 999999, 'x') as c{i}" for i in range(40))
+
+
 @pytest.mark.parametrize(
-    "sql",
+    "sql, reason",
     [
-        # 2 x 10^7 rows
-        "select s.name, s.age from singer s, (with recursive c(x) as (select 1 union all "
-        "select x + 1 from c where x < 10000000) select x from c) where s.age > 30",
-        "select name, zeroblob(1000000000) from singer where age > 30",
-        "select name, printf('%.*c', 1000000000, 'x') from singer where age > 30",
+        # endless rows, streamed from the table
+        (
+            "with recursive c(n, a) as (select name, age from singer where age > 30 "
+            "union all select n, a from c) select n, a from c",
+            "more rows",
+        ),
+        ("select name, zeroblob(1000000000) from singer where age > 30", "fails"),
+        # SQLite's printf gives NULL past the length limit
+        ("select name, printf('%.*c', 1000000000, 'x') from singer where age > 30", "differs"),
+        # 40 columns of almost 1 MB each, per row
+        (f"select {WIDE} from singer where age > 30", "columns"),
+        # right width, rows of almost 1 MB each
+        (
+            "select name, printf('%.*c', 999999, 'x') from singer s, "
+            "(with recursive c(x) as (select 1 union all select x + 1 from c) select x from c)",
+            "more rows",
+        ),
     ],
 )
-def test_huge_results_stop_early(dbs, sql):
+def test_huge_results_stop_early(dbs, sql, reason):
     import resource
     import sys
     import time
@@ -226,5 +262,16 @@ def test_huge_results_stop_early(dbs, sql):
 
     before, start = peak_kib(), time.perf_counter()
     assert score(turns((sql, GOLD)), gold_sql=[GOLD_SQL], db_paths=[dbs]) == -1.0
+    assert reason in last_reason()
     assert time.perf_counter() - start < 2.0
     assert peak_kib() - before < 100 * 1024  # under 100 MiB
+
+
+def test_large_gold_still_bounds_the_query(tmp_path):
+    db = make_db(tmp_path / "big.db", [(f"p{i}", i) for i in range(1000)])
+    gold_sql = "select name, age from singer"
+    gold = [[f"p{i}", i] for i in range(1000)]
+    assert score(turns((gold_sql, gold)), gold, gold_sql=[gold_sql], db_paths=[[db]]) == 2.0
+    big = "select name, printf('%.*c', 999999, 'x') from singer"
+    assert score(turns((big, gold)), gold, gold_sql=[gold_sql], db_paths=[[db]]) == -1.0
+    assert "more data" in last_reason()
