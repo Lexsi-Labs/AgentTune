@@ -63,20 +63,32 @@ argument is a list where each item is either a raw string or a list of chat-mess
 functions that read the "final answer" pick the last `role: assistant` message when given
 the list form.
 
+In agentic GRPO, TRL builds `completions` by decoding the rollout's `completion_ids`, which
+run every turn together with the raw tool output as one assistant message. The rollout also
+passes `conversations`, the turns kept apart. The rewards that score the **final reply**
+(`correctness_reward`, `reward_correct_answer`, `reward_concise_answer`, `sql_format_reward`,
+`answer_correctness_reward`, `finqa_answer_correctness_reward`) take its last
+`role: assistant` turn from `conversations` when present (and sent by the rollout, which also
+passes `trajectories`; a dataset column of that name is ignored), so a number, `*no*` or markdown
+in a tool result is not read as the model's answer. Agentic RLOO passes only the decoded text,
+so there these rewards read the whole rollout, tool output included; the last number is usually
+the reply's, but not when the reply has none, or is a bare number glued to tool text that ends
+in a letter, digit or `_` (`...in fiscal year` + `0`). Agentic PPO passes the decoded text and no `answer`.
+
 | Registry key | File | Signature | Scores |
 |---|---|---|---|
-| `correctness_reward` | `sql.py` | `(completions, answer=None, **kwargs)` | Parses `*yes*`/`*no*` from the completion; `-0.5` no match, `0.6` matches `answer`, `-1.0` wrong |
+| `correctness_reward` | `sql.py` | `(completions, answer=None, **kwargs)` | Parses the first `*yes*`/`*no*` in the final reply; `-0.5` no match, `0.6` matches `answer`, `-1.0` wrong |
 | `structure_reward` | `sql.py` | `(completions, **kwargs)` | Tool-call → tool-response → content shape: `0.1`/`0.05` if well-formed, `-0.15` if a call was made with no response, else `0.0` |
 | `query_reward` | `sql.py` | `(completions, answer=None, **kwargs)` | SQL strategy heuristic: penalizes >3 queries, `LIMIT 1`, and a missing `WHERE` or one that names no column (`where 1 = 1`); rewards a `yes`/`no` `answer` that matches whether any rows were found. Text tool output (`"[(7, 'Ana')]"`) is parsed |
 | `result_match_reward` | `sql.py` | `(completions, gold_rows=None, gold_sql=None, db_paths=None, sql_tools=None, **kwargs)` | Opt-in. `+2.0` if the rows of the last query that ran equal the gold rows, else `-1.0`; `0.0` for an example without `gold_rows`. Catches filters a text check cannot, such as `where customer_id > 0`. See [below](#result_match_reward-what-counts-as-a-match) |
-| `reward_correct_answer` | `sql.py` | `(completions, answer=None, **kwargs)` | Numeric match against `answer` in the final assistant message: `1.5` exact (±1e-3), `0.5` within 1%, else `0.0` |
+| `reward_correct_answer` | `sql.py` | `(completions, answer=None, **kwargs)` | The **last** number in the final reply against `answer`: `1.5` exact (±1e-3), `0.5` within 1%, else `0.0`. A list of candidates scores like its last entry. A number joined to the word or number before it (`ORD-1003`, `SKU-C91`) or inside a hyphenated date or range (`2026-09-03`) is not read; a unit after a number is (`12GB` reads 12), and so are other numbers after the answer (`42 units, reorder point 1000` reads 1000) |
 | `reward_tool_used` | `sql.py` | `(completions, **kwargs)` | `1.0` if any message has `role: tool`, else `0.0` |
-| `reward_concise_answer` | `sql.py` | `(completions, **kwargs)` | `0.3` if the final assistant message is ≤80 words |
+| `reward_concise_answer` | `sql.py` | `(completions, **kwargs)` | `0.3` if the final reply is ≤80 words; `0.0` for no reply |
 | `format_reward` | **`use_case.py`** (shadows `sql.py`'s; see above) | `(prompts, completions, **kwargs)` | `0.1` if `<answer>...</answer>` is present |
 | `search_grounding_reward` | `use_case.py` | `(prompts, completions, tool_call_counts=None, **kwargs)` | Tiered on `tool_call_counts`: `0`→0.0, `1`→0.2, `2`→0.3, `3+`→0.4. Returns all `0.0` if `tool_call_counts` isn't passed |
 | `message_id_citation_reward` | `use_case.py` | `(prompts, completions, **kwargs)` | `+0.2` if the completion contains an email address or the string `message_id` |
 | `answer_format_reward` | `use_case.py` | `(prompts, completions, **kwargs)` | `+0.1` if `<answer>` content is ≥10 chars |
-| `answer_correctness_reward` | **`use_case.py`** (weaker than `finqa.py`'s; see above) | `(prompts, completions, answer=None, **kwargs)` | Compares `<answer>` text to `answer`: `1.0` exact, `0.5` substring either way, else `0.0` |
+| `answer_correctness_reward` | **`use_case.py`** (weaker than `finqa.py`'s; see above) | `(prompts, completions, answer=None, **kwargs)` | Compares the final reply's `<answer>` text (else the whole reply) to `answer`: `1.0` exact, `0.5` if one contains the other as whole words and is at most twice as long, else `0.0` (also for an empty answer or no `answer`) |
 | `placeholder_coverage_reward` | **`use_case.py`** (weaker than `finqa.py`'s; see above) | `(prompts, completions, answer=None, **kwargs)` | Fraction of gold numeric tokens found as a **substring** of the prediction; `1.0`/`0.5`/`0.2`/`0.0` at 80%/50%/20% coverage |
 | `template_structure_reward` | `use_case.py` | `(prompts, completions, answer=None, **kwargs)` | `+0.3 ×` fraction of gold's bolded `**headers**` reproduced in the prediction |
 | `computation_reward` | `use_case.py` | `(prompts, completions, tool_call_counts=None, **kwargs)` | `0.2` for 1 call, `0.3` for 2+, `0.0` for 0/absent; intended for a `run_python` count |
@@ -86,12 +98,12 @@ the list form.
 | `distilled_judge_reward` | `distilled_judge.py` | `(prompts, completions, **kwargs)` | See dedicated section below |
 | `tool_chain_reward` | `use_case.py` | `(prompts, completions, **kwargs)` | `+0.1` per tool name (`list_dir`/`read_file`/`run_python`/`write_file`) found in the completion text, capped at `0.4` |
 | `summary_written_reward` | `use_case.py` | `(prompts, completions, sample_dir=None, **kwargs)` | `+0.2` if a new file appears in `sample_dir` beyond the file-ingestion tool's original 4 |
-| `sql_format_reward` | `sql.py` | `(completions, **kwargs)` | `+0.2` for markdown structure (bold/headers/lists/code fences); `sql.py`'s own `format_reward`, under its non-shadowed key |
+| `sql_format_reward` | `sql.py` | `(completions, **kwargs)` | `+0.2` for markdown structure (bold/headers/lists/code fences) in the final reply; `sql.py`'s own `format_reward`, under its non-shadowed key |
 | `finqa_format_reward` | `finqa.py` | `(prompts, completions, **kwargs)` | `finqa.py`'s own, differently-scored `format_reward` |
 | `finqa_sql_grounding_reward` | `finqa.py` | `(prompts, completions, **kwargs)` | See [above](#the-catalog-all-26-registered-functions) |
 | `finqa_calculator_grounding_reward` | `finqa.py` | `(prompts, completions, **kwargs)` | See above |
 | `finqa_placeholder_coverage_reward` | `finqa.py` | `(prompts, completions, answer=None, **kwargs)` | Unit-aware, tolerance-based version of `placeholder_coverage_reward` |
-| `finqa_answer_correctness_reward` | `finqa.py` | `(prompts, completions, answer=None, **kwargs)` | Tolerance-based comparison across *all* gold numbers, not just an exact/substring match |
+| `finqa_answer_correctness_reward` | `finqa.py` | `(prompts, completions, answer=None, **kwargs)` | The **first** number in the final reply's `<answer>` against each gold number: `1.0` within 2%, `0.5` within 10%. Text answers: `1.0` exact, `0.5` as `answer_correctness_reward` |
 
 ## `result_match_reward`: what counts as a match
 

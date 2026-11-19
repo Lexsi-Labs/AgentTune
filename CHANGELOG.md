@@ -85,6 +85,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `conversations` the agentic trainers pass, and parse JSON-string tool-call `arguments`. They read
   only `completions`, which holds the assistant text, so in training they never saw a query or a
   tool result (`query_reward` was always -1.5, `structure_reward` always 0.0).
+- SQL `reward_correct_answer` paid 1.5 when any number in the completion matched `answer`, so
+  "41, 42 or 43" and `0;1;2;...;999` (one word, so also concise) scored like "42". It now reads
+  the last number of the final reply. A number joined to the word or number before it
+  (`ORD-1003`, `SKU-C91`, `orders_2023`) or inside a hyphenated date or range (`2026-09-03`,
+  `40-44`) is not read, so `3 units short on ORD-1003` reads 3; a unit after a number is
+  (`12GB` reads 12). Other numbers after the answer are read as the answer: `42 units, reorder
+  point 1000`, `ticket #4418`, `due Sep 3, 2026`.
+- In agentic GRPO, `completions` is the decoded `completion_ids`: every turn plus the raw tool
+  output, as one message. So a number the tool returned counted as the answer, a long tool result
+  made the reply "not concise", and markdown or `*no*` in tool output was scored as the reply's.
+  `reward_correct_answer`, `reward_concise_answer`, `correctness_reward`, `sql_format_reward`,
+  `answer_correctness_reward` and `finqa_answer_correctness_reward` now read the last assistant
+  turn from the rollout's `conversations` when the trainer passes it (agentic GRPO does; RLOO and
+  PPO do not). A dataset column named `conversations` is not read as the reply.
+- `reward_concise_answer` gives 0.0, not 0.3, when there is no final reply.
+- `answer_correctness_reward` gave 0.5 to an empty answer (`""` is a substring of every gold), to a
+  sub-word fragment (`a` for `Paris`), to a list of candidates (`Paris or Lyon or Marseille`) and
+  to a stop word of a long gold (`the`), and 0.5 or 1.0 to every answer when no gold was passed.
+  Partial credit now needs one answer to contain the other as whole words and be at most twice as
+  long. A list then pays only when the gold has at least as many words as the rest of the list,
+  so at most two of its candidates can pay, and listing never beats committing to the likelier
+  one (0.5 x (p1 + p2) <= max(p1, p2)). An empty answer or no gold (`None`) scores 0.0. Partial credit is gone for an answer inside a sentence (`The answer is
+  Paris`, or a reply without `<answer>` more than twice the gold's length), for a short answer to
+  a long gold (`Roosevelt` for `Franklin D. Roosevelt`), across inflections (`apple`/`apples`) and
+  in scripts without spaces (`北京`/`北京市`). The same applies to the text path of
+  `finqa_answer_correctness_reward`.
+- `finqa_answer_correctness_reward` matched every number in `<answer>` against the gold, so a list
+  of candidates or a spray of numbers scored 1.0. It now reads the first number in `<answer>`, as
+  `numerical_match_reward` does; an answer that opens with another number (`In 2009, revenue grew
+  14.1%`) reads that one.
 
 ## [1.1.0] - 2026-09-28
 
