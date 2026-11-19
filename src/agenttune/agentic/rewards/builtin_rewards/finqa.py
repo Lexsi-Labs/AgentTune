@@ -23,6 +23,9 @@ from typing import Any
 
 from agenttune.utils.score_logger import log_score
 
+from ._reply import final_reply
+from .use_case import _partial_overlap
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -324,17 +327,20 @@ def answer_correctness_reward(
     **kwargs: Any,
 ) -> list[float]:
     """
-    Primary correctness signal.  Checks the content of <answer>...</answer>.
+    Primary correctness signal.  Checks the content of <answer>...</answer> in the
+    final reply (else the whole final reply). When the trainer passes the rollout's
+    `conversations` (agentic GRPO), numbers in tool output don't count.
 
-    Numeric answers (the majority in FinQA):
-      +1.0  if the primary gold number is in pred within 2 % tolerance
-      +0.5  if within 10 % tolerance  (partial credit)
+    Numeric answers (the majority in FinQA), on the first number in pred, so listing
+    candidates scores like committing to the first of them:
+      +1.0  within 2 % of a gold number
+      +0.5  within 10 % tolerance  (partial credit)
        0.0  otherwise
 
     Text answers (question_type == 'span' etc.):
       +1.0  exact match (case-insensitive, stripped)
-      +0.5  one string contains the other
-       0.0  otherwise
+      +0.5  one contains the other as whole words, at most twice as long
+       0.0  otherwise, or an empty prediction
 
     FIX over original numerical_match_reward:
       - Tests ALL gold numbers, not just the first one.
@@ -345,17 +351,20 @@ def answer_correctness_reward(
     for i, (c, gold) in enumerate(
         zip(completions, answer or [""] * len(completions), strict=False)
     ):
-        pred = _extract_answer(str(c))
-        gold_str = str(gold).strip()
+        pred = _extract_answer(final_reply(c, i, kwargs))
+        gold_str = "" if gold is None else str(gold).strip()
 
         gold_numbers = _extract_numbers(gold_str)
-        pred_numbers = _extract_numbers(pred)
+        pred_numbers = _extract_numbers(pred)[:1]
 
         if gold_numbers:
             # --- numeric path ---
-            # Best match: for each gold number find closest pred number
+            # Best match of pred's first number against each gold number
             best_score = 0.0
-            reason = f"no predicted number within 10% of any gold number {gold_numbers} -> 0.0"
+            reason = (
+                f"first predicted number {pred_numbers} not within 10% of any gold number "
+                f"{gold_numbers} -> 0.0"
+            )
             for g in gold_numbers:
                 for p in pred_numbers:
                     if _numbers_close(p, g, tol=0.02):
@@ -378,10 +387,10 @@ def answer_correctness_reward(
                 score, reason = 0.0, "gold answer is empty -> 0.0"
             elif pred_clean == gold_clean:
                 score, reason = 1.0, f"prediction exactly matches gold {gold_clean!r} -> 1.0"
-            elif gold_clean in pred_clean or pred_clean in gold_clean:
+            elif _partial_overlap(pred_clean, gold_clean):
                 score, reason = (
                     0.5,
-                    "prediction and gold partially overlap (substring match) -> 0.5",
+                    "prediction and gold partially overlap (whole words) -> 0.5",
                 )
             else:
                 score, reason = (

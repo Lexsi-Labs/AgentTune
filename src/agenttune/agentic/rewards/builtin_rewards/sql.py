@@ -17,6 +17,8 @@ from pathlib import Path
 from agenttune.agentic.rollout_engines.tool_call_parse import _THINK_BLOCK_RE
 from agenttune.utils.score_logger import log_score
 
+from ._reply import final_reply as _final_reply
+
 logger = logging.getLogger(__name__)
 
 # A reasoning block cut off by the token limit has no closing tag; drop it to the end.
@@ -78,6 +80,17 @@ def _turns(completion, i, kwargs):
     return completion if isinstance(completion, list) else []
 
 
+# A number in the reply, unless it is joined to the word or number before it or sits
+# inside a hyphenated date or range: the 1003 in "ORD-1003", the 91 in "SKU-C91", the
+# 2023 in "orders_2023" and the parts of "2026-09-03" are not read, and a range
+# ("40-44") reads as no number. A unit after it
+# is fine ("12GB" reads 12, "Rs.1,234" reads 1234), and the digits after a decimal
+# point are never read alone ("v1.5" reads nothing).
+_ANSWER_NUMBER_RE = re.compile(
+    r"(?<!\w)(?<!\w-)(?<!\d\.)-?\d+(?:,\d{3})*(?:\.\d+)?(?![\d_]|[.,-]\d)"
+)
+
+
 def _sql_of(call) -> str:
     """The `sql_command` of a tool call; rollouts store `arguments` as a JSON string."""
     args = (call.get("function") or {}).get("arguments") or {}
@@ -93,14 +106,10 @@ def _sql_of(call) -> str:
 
 
 def correctness_reward(completions, answer=None, **kwargs):
-    """Reward *yes*/*no* correctness enclosed in stars."""
+    """Reward *yes*/*no* correctness enclosed in stars, read from the final reply."""
     rewards = []
     for i, (completion, ans) in enumerate(zip(completions, answer or [], strict=False)):
-        raw = (
-            completion[-1]["content"].lower()
-            if isinstance(completion, list)
-            else str(completion).lower()
-        )
+        raw = _final_reply(completion, i, kwargs).lower()
         match = re.search(r"\*(yes|no)\*", raw)
         guess = match.group(1) if match else None
         if guess is None:
@@ -541,20 +550,20 @@ def result_match_reward(
 
 
 def reward_correct_answer(completions, answer=None, **kwargs):
-    """Exact/near-miss numeric answer reward."""
+    """Exact/near-miss numeric answer reward on the last number of the final reply.
+
+    Only the last number counts, as the reply's conclusion (the math metric reads the
+    last conclusion too), so listing candidates ("41, 42 or 43") or spraying numbers
+    scores like committing to the last of them. A number joined to the word or number
+    before it (ORD-1003, SKU-C91, orders_2023) or inside a hyphenated date or range
+    (2026-09-03, 40-44) is not read, so "3 units short on ORD-1003" reads 3; a unit
+    after a number is ("12GB" reads 12). Other numbers after the answer are read as the
+    answer: "42 units, reorder point 1000", "ticket #4418", "due Sep 3, 2026"."""
     scores = []
     for i, (comp, gt) in enumerate(zip(completions, answer or [], strict=False)):
-        final_text = ""
-        if isinstance(comp, list):
-            for msg in reversed(comp):
-                if isinstance(msg, dict) and msg.get("role") == "assistant":
-                    final_text = str(msg.get("content", ""))
-                    break
-        else:
-            final_text = str(comp)
         # A number the model only mentions while reasoning is not its answer.
-        final_text = _strip_thinking(final_text)
-        numbers = re.findall(r"-?\d+(?:,\d{3})*\.?\d*", final_text)
+        final_text = _strip_thinking(_final_reply(comp, i, kwargs))
+        numbers = _ANSWER_NUMBER_RE.findall(final_text)
         try:
             gt_val = float(gt)
         except (ValueError, TypeError):
@@ -568,21 +577,20 @@ def reward_correct_answer(completions, answer=None, **kwargs):
             log_score("sql.reward_correct_answer", score, reasons=[reason], meta={"index": i})
             scores.append(score)
             continue
-        score = 0.0
-        reason = f"no number within tolerance of gold {gt_val} found in completion -> 0.0"
-        for n in numbers:
-            try:
-                pred = float(n.replace(",", ""))
-                if abs(pred - gt_val) < 1e-3:
-                    score = 1.5
-                    reason = f"predicted {pred} matches gold {gt_val} exactly -> 1.5"
-                    break
-                if gt_val != 0 and abs(pred - gt_val) / abs(gt_val) < 0.01:
-                    if score < 0.5:
-                        score = 0.5
-                        reason = f"predicted {pred} within 1% of gold {gt_val} -> 0.5"
-            except ValueError:
-                continue
+        if not numbers:
+            score = 0.0
+            reason = "no number in the final reply -> 0.0"
+        else:
+            pred = float(numbers[-1].replace(",", ""))
+            if abs(pred - gt_val) < 1e-3:
+                score = 1.5
+                reason = f"last number {pred} matches gold {gt_val} exactly -> 1.5"
+            elif gt_val != 0 and abs(pred - gt_val) / abs(gt_val) < 0.01:
+                score = 0.5
+                reason = f"last number {pred} within 1% of gold {gt_val} -> 0.5"
+            else:
+                score = 0.0
+                reason = f"last number {pred} not within 1% of gold {gt_val} -> 0.0"
         log_score("sql.reward_correct_answer", score, reasons=[reason], meta={"index": i})
         scores.append(score)
     return scores
@@ -619,24 +627,20 @@ def reward_tool_used(completions, **kwargs):
 
 
 def reward_concise_answer(completions, **kwargs):
-    """Small bonus for short final replies (<= 80 words)."""
+    """Small bonus for short final replies (<= 80 words). No reply earns nothing."""
     scores = []
     for i, comp in enumerate(completions):
-        final_text = ""
-        if isinstance(comp, list):
-            for msg in reversed(comp):
-                if isinstance(msg, dict) and msg.get("role") == "assistant":
-                    final_text = str(msg.get("content", ""))
-                    break
+        reply = _final_reply(comp, i, kwargs)
+        n_words = len(reply.split())
+        if not re.search(r"\w", reply):
+            score = 0.0
+            reason = "no final reply (empty or no words) -> 0.0"
+        elif n_words <= 80:
+            score = 0.3
+            reason = f"final reply has {n_words} words (<=80) -> 0.3"
         else:
-            final_text = str(comp)
-        n_words = len(final_text.split())
-        score = 0.3 if n_words <= 80 else 0.0
-        reason = (
-            f"final reply has {n_words} words (<=80) -> 0.3"
-            if score
-            else f"final reply has {n_words} words (>80) -> 0.0"
-        )
+            score = 0.0
+            reason = f"final reply has {n_words} words (>80) -> 0.0"
         log_score("sql.reward_concise_answer", score, reasons=[reason], meta={"index": i})
         scores.append(score)
     return scores
@@ -646,14 +650,7 @@ def format_reward(completions, **kwargs):
     """Reward well-formed markdown or structured output."""
     scores = []
     for i, comp in enumerate(completions):
-        final_text = ""
-        if isinstance(comp, list):
-            for msg in reversed(comp):
-                if isinstance(msg, dict) and msg.get("role") == "assistant":
-                    final_text = str(msg.get("content", ""))
-                    break
-        else:
-            final_text = str(comp)
+        final_text = _final_reply(comp, i, kwargs)
         has_structure = bool(re.search(r"(\*\*|#{1,3} |\n-\s|\n\d+\.\s|```)", final_text))
         score = 0.2 if has_structure else 0.0
         reason = (

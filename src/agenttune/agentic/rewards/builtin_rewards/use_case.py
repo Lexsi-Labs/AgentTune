@@ -3,6 +3,8 @@ import re
 
 from agenttune.utils.score_logger import log_score
 
+from ._reply import final_reply
+
 
 # ---------------------------------------------------------------------
 # 1. Tool usage / grounding reward
@@ -120,35 +122,59 @@ def answer_format_reward(prompts, completions, **kwargs):
 # ---------------------------------------------------------------------
 # 4. (Optional but recommended) Answer correctness reward
 # ---------------------------------------------------------------------
+def _contains_words(text: str, part: str) -> bool:
+    """True when `part` occurs in `text` as whole words: "paris" in "paris, france",
+    but not "a" in "paris"."""
+    return re.search(rf"(?<!\w){re.escape(part)}(?!\w)", text) is not None
+
+
+def _partial_overlap(pred: str, gold: str) -> bool:
+    """One answer contains the other as whole words, and is at most twice as long in
+    words. "Paris, France" overlaps "Paris"; "Paris or Lyon or Marseille" (a list of
+    candidates) and "the" (for "The Walt Disney Company") do not. An answer with no word
+    characters (empty, or only punctuation) overlaps nothing, since every string
+    contains ""."""
+    n_pred, n_gold = len(re.findall(r"\w+", pred)), len(re.findall(r"\w+", gold))
+    if not n_pred or not n_gold or max(n_pred, n_gold) > 2 * min(n_pred, n_gold):
+        return False
+    return _contains_words(pred, gold) or _contains_words(gold, pred)
+
+
 def answer_correctness_reward(prompts, completions, answer=None, **kwargs):
     """
     Compare predicted answer with gold answer.
 
     Scoring:
       +1.0 exact match
-      +0.5 partial overlap
-       0.0 no match
+      +0.5 partial overlap: one contains the other as whole words and is at most
+           twice as long
+       0.0 no match, an empty prediction, or no gold answer
+
+    The prediction is the final reply's <answer>, else the whole final reply.
     """
     rewards = []
 
     for i, (completion, gold) in enumerate(
         zip(completions, answer or [""] * len(completions), strict=False)
     ):
-        text = str(completion)
-        gold = str(gold)
+        text = final_reply(completion, i, kwargs)
+        gold = "" if gold is None else str(gold)
 
         # extract <answer> if present
         match = re.search(r"<answer>(.*?)</answer>", text, re.IGNORECASE | re.DOTALL)
-        pred = match.group(1).strip().lower() if match else text.lower()
+        pred = (match.group(1) if match else text).strip().lower()
 
         gold_clean = gold.strip().lower()
 
-        if pred == gold_clean:
+        if not gold_clean:
+            score = 0.0
+            reason = "gold answer is empty -> 0.0"
+        elif pred == gold_clean:
             score = 1.0
             reason = f"prediction exactly matches gold ({gold_clean!r}) -> 1.0"
-        elif gold_clean in pred or pred in gold_clean:
+        elif _partial_overlap(pred, gold_clean):
             score = 0.5
-            reason = "prediction and gold partially overlap (substring match) -> 0.5"
+            reason = "prediction and gold partially overlap (whole words) -> 0.5"
         else:
             score = 0.0
             reason = f"prediction {pred!r} does not match gold {gold_clean!r} -> 0.0"
