@@ -36,6 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Multi-turn tool rollouts: the ids added to `completion_ids` after each tool step are now the
+  chat template's own (the rest of the model's turn, the tool or folded user turns with their
+  markers, the next generation prompt) instead of the bare `str(result)` of each call. Before,
+  the trainer scored the turn after a tool call in a context it was never sampled from, which
+  skews the loss and, under vLLM, the importance-sampling ratios. These ids stay out of the
+  loss (`env_mask` 0); masked segments are longer than before. The user turns added by
+  `force_action_on_stall` and `force_final_answer` are still not in `completion_ids`. If the
+  template cannot render the tool turn, the rollout warns and adds the bare results as before.
 - Chat templates that ignore `tools` (Tiny Aya, Aya Expanse, North, Gemma 3): rollouts fold tool
   results into user turns for the model, and reward functions got that folded conversation, with
   no `"tool"` turn. `result_match_reward` scored every rollout -1.0, `structure_reward` scored every
