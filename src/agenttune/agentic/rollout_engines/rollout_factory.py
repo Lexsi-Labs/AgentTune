@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import inspect
 import json
+import os
 import re
 import uuid
 import warnings
@@ -519,6 +520,124 @@ def _strip_special_tokens(text: str, tokenizer) -> str:
     for tok in sorted(filter(None, specials), key=len, reverse=True):
         text = text.replace(tok, "")
     return text.strip()
+
+
+_TOOL_TURN_PROBE = "agenttune-tool-turn-probe"
+
+
+def _added_tokens(tokenizer, special_only: bool) -> list[str]:
+    """The tokenizer's added-token strings (only the special ones if
+    ``special_only``), longest first."""
+    found = set(getattr(tokenizer, "all_special_tokens", None) or [])
+    for t in (getattr(tokenizer, "added_tokens_decoder", None) or {}).values():
+        if not special_only or getattr(t, "special", False):
+            found.add(getattr(t, "content", None))
+    return sorted(filter(None, found), key=len, reverse=True)
+
+
+def _tool_turn_ids(
+    tokenizer,
+    before: list[dict],
+    after: list[dict],
+    schemas: list[dict] | None,
+    gen_ids: list[int],
+    enable_thinking: bool = False,
+    tool_result_format: str = DEFAULT_TOOL_RESULT_FORMAT,
+) -> list[int]:
+    """Token ids the chat template puts after the model's last generation
+    (``gen_ids``) in the prompt of its next one, once the tool results are added.
+
+    ``before`` ends with the model's turn; ``after`` adds the tool turns (folded
+    if the template needs it). The ids are the rest of the model's turn that it
+    did not generate itself (e.g. Tiny Aya's ``<|END_RESPONSE|>``), the tool
+    turns with the template's markers, and the next generation prompt. Each
+    generation in ``completion_ids`` is then followed by the text the next one
+    was sampled after. (Whether the earlier text matches too depends on the
+    template rendering the model's turn as generated.)
+    """
+
+    def render(conv, gen):
+        return str(
+            _render_chat_template(
+                tokenizer,
+                conv,
+                schemas,
+                enable_thinking=enable_thinking,
+                tool_result_format=tool_result_format,
+                tokenize=False,
+                add_generation_prompt=gen,
+            )
+        )
+
+    added = _added_tokens(tokenizer, special_only=False)
+
+    def boundary(text: str, others: list[str]) -> int:
+        """Where ``text`` stops agreeing with all of ``others``, moved back so it
+        never falls inside an added token."""
+        cut = len(os.path.commonprefix([text, *others]))
+        for t in added:
+            start = text.rfind(t, max(0, cut - len(t) + 1), cut + len(t) - 1)
+            if 0 <= start < cut < start + len(t):
+                cut = start
+        return cut
+
+    nxt = render(after, True)
+    # The model's turn is nxt[lo:hi]: from where the conversation before it ends
+    # to where the new turns' own content starts (found by rendering them with
+    # a probe as content). The template may add markers around both ends.
+    probe = list(before) + [{**m, "content": _TOOL_TURN_PROBE} for m in after[len(before) :]]
+    hi = boundary(nxt, [render(probe, True)])
+    lo = min(boundary(nxt, [render(before[:-1], False)]), hi)
+
+    # Split what the model generated into text and the special tokens it ended
+    # on (EOS, <|END_ACTION|>, <|eom_id|>, ...).
+    generated = tokenizer.decode(gen_ids, skip_special_tokens=False) if gen_ids else ""
+    specials = _added_tokens(tokenizer, special_only=True)
+    text = generated
+    while True:
+        text = text.rstrip()
+        tail = next((t for t in specials if text.endswith(t)), None)
+        if tail is None:
+            break
+        text = text[: -len(tail)]
+    ended_on = generated[len(text) :].strip()
+
+    # The end of the generated text in the model's turn: the longest suffix of
+    # it (whitespace ignored: templates re-serialise tool-call JSON) found there.
+    region = nxt[lo:hi]
+    kept = [i for i, c in enumerate(region) if not c.isspace()]
+    region_ns = "".join(region[i] for i in kept)
+    text_ns = "".join(text.split())
+    end = None
+    for n in range(min(len(text_ns), 64), 3, -1):
+        i = region_ns.rfind(text_ns[-n:])
+        if i >= 0:
+            end = lo + kept[i + n - 1] + 1
+            break
+    if end is None:
+        # Nothing of the text is found (empty generation, or a template that
+        # rewrites it): start where `nxt` stops agreeing with the conversation
+        # up to and including the model's turn, moved back over the markers
+        # there, which the next turn may share (R7B's <|START_OF_TURN_TOKEN|>).
+        # The tokens the model ended on are skipped again below.
+        end = min(boundary(nxt, [render(before, False)]), hi)
+        while end > lo:
+            stripped = nxt[lo:end].rstrip()
+            tail = next((t for t in specials if stripped.endswith(t)), None)
+            if tail is None:
+                break
+            end = lo + len(stripped) - len(tail)
+    # Special tokens the model ended on are already in completion_ids: go on
+    # after them where the template has them too.
+    while ended_on:
+        j = nxt.find(ended_on, end, hi + len(ended_on))
+        if j >= 0:
+            end = j + len(ended_on)
+            break
+        # Only the last one may be there (the template drops the others).
+        first = next((t for t in specials if ended_on.startswith(t)), None)
+        ended_on = ended_on[len(first) :].strip() if first else ""
+    return _ids_to_list(tokenizer.encode(nxt[end:], add_special_tokens=False))
 
 
 def _template_renders_tools(tokenizer, schemas: list[dict]) -> bool:
@@ -1900,6 +2019,8 @@ def _execute_trajectory(
     all_completion_ids: list[int] = []
     all_logprobs: list[tuple] = []
     all_tool_mask: list[int] = []
+    # The ids of the latest generation, for the tool-turn tokens after it.
+    last_gen_ids: list[int] = []
 
     # ── Prompt-id helper ──────────────────────────────────────────────────────
     def _compute_prompt_ids(conversation: list[dict], schemas: list[dict]) -> list[int]:
@@ -2111,6 +2232,7 @@ def _execute_trajectory(
             all_completion_ids.extend(comp_ids)
             all_logprobs.extend(lp_tuples)
             all_tool_mask.extend([1] * len(comp_ids))
+            last_gen_ids[:] = comp_ids
 
             structured = {"role": "assistant", "content": _strip_special_tokens(raw_vis, tokenizer)}
             return raw, structured, lp_tuples, meta
@@ -2170,6 +2292,7 @@ def _execute_trajectory(
         all_completion_ids.extend(flat_ids)
         all_logprobs.extend(lp_tuples)
         all_tool_mask.extend([1] * len(flat_ids))
+        last_gen_ids[:] = flat_ids
 
         return raw, structured, lp_tuples, meta
 
@@ -2374,6 +2497,7 @@ def _execute_trajectory(
         #     tool_message = {"role": "tool", "name": name, "content": str(result)}
         #     conversation.append(tool_message)
         #     completions_list.append(tool_message)
+        conversation_before_tools = list(conversation)
         for tc, (name, result) in zip(tool_calls, tool_results, strict=False):
             tool_call_id = tc.get("id") or f"call_{name}"
             tool_message = {
@@ -2396,14 +2520,38 @@ def _execute_trajectory(
                     _seen_chunk_ids.add(_cid)
                     retrieved_chunk_ids.append(_cid)
 
-            if tokenizer is not None:
-                tool_ids = _ids_to_list(tokenizer.encode(str(result), add_special_tokens=False))
-                all_completion_ids.extend(tool_ids)
-                all_logprobs.extend([(0.0, tid) for tid in tool_ids])
-                all_tool_mask.extend([0] * len(tool_ids))
-
         if fold_tool_results:
             conversation = fold_tool_messages_into_user(conversation, tool_result_format)
+
+        # The tool turns as the template renders them for the next generation
+        # (end of the model's turn, tool turn markers, next generation prompt),
+        # not the bare result text: the trainer must score the next turn in the
+        # context the model was sampled from. Masked out of the loss.
+        if tokenizer is not None:
+            try:
+                tool_ids = _tool_turn_ids(
+                    tokenizer,
+                    conversation_before_tools,
+                    conversation,
+                    tool_schemas,
+                    last_gen_ids,
+                    enable_thinking=enable_thinking,
+                    tool_result_format=tool_result_format,
+                )
+            except Exception as e:  # a template that cannot render the turn: the old ids
+                warnings.warn(
+                    f"Could not render the tool turn ({e}); adding the bare tool results.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                tool_ids = [
+                    tid
+                    for _, result in tool_results
+                    for tid in _ids_to_list(tokenizer.encode(str(result), add_special_tokens=False))
+                ]
+            all_completion_ids.extend(tool_ids)
+            all_logprobs.extend([(0.0, tid) for tid in tool_ids])
+            all_tool_mask.extend([0] * len(tool_ids))
 
         # ── Record step ───────────────────────────────────────────────────────
         step = Step(
