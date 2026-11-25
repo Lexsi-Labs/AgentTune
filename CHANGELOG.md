@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   skews the loss and, under vLLM, the importance-sampling ratios. These ids stay out of the
   loss (`env_mask` 0); masked segments are longer than before. The user turns added by
   `force_action_on_stall` and `force_final_answer` are still not in `completion_ids`. If the
-  template cannot render the tool turn, the rollout warns and adds the bare results as before.
+  template cannot render the tool turn, the rollout warns and adds the bare results as before (#25).
 - Chat templates that ignore `tools` (Tiny Aya, Aya Expanse, North, Gemma 3): rollouts fold tool
   results into user turns for the model, and reward functions got that folded conversation, with
   no `"tool"` turn. `result_match_reward` scored every rollout -1.0, `structure_reward` scored every
